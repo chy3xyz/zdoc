@@ -1,0 +1,54 @@
+name: Feature Request
+description: Suggest an improvement or new capability
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is a fork of [Zine](https://github.com/kristoff-it/zine),
+        so a request may already be answerable by how Zine works today.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: >
+        Describe the situation rather than the solution. It usually leads to a
+        better answer than "add a flag for X".
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: What you have in mind, and what you have already tried.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which part of this project does this affect?
+      options:
+        - Documentation mode (zdoc docs)
+        - The built-in theme
+        - Markdown handling
+        - Build output or links
+        - Blog mode / Zine compatibility
+        - Something else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Please confirm
+      options:
+        - label: I searched the existing issues and discussions first.
+          required: true
+        - label: >
+            This is not already possible in Zine upstream, or I have not found
+            it there.
+          required: false

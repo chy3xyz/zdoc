@@ -1,33 +1,79 @@
 name: Bug Report
-description: File a bug report
+description: Something does not work as expected
+title: "[bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        A bug is when something works differently than it is expected to.
-        ## Remember to search before filing a new report
-        Please search for this bug in the issue tracker, and use a bug report title that
-        would have made your bug report turn up in the search results for your search query.
+        Thanks for taking the time to report this.
+
+        ## The most common cause
+
+        Most reports turn out to be a document that a static site generator
+        considers invalid but which renders perfectly well on GitHub — a dead
+        `#anchor`, a link that leaves the docs tree, a skipped heading level,
+        raw HTML, a reference-style link, or a code fence in a language the
+        highlighter does not know.
+
+        In documentation mode these are reported as **warnings** and the site is
+        still generated. If your build failed, or a page is missing or wrong,
+        that is a bug worth reporting.
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which command did you run?
+      options:
+        - zdoc docs (documentation mode)
+        - zdoc release (blog mode)
+        - zdoc (development server)
+        - other
+    validations:
+      required: true
+
   - type: input
     id: version
     attributes:
-      label: Zine Version
-      description: "The output of `zdoc version`"
-      placeholder: "0.10.3"
+      label: zdoc version
+      description: The output of `zdoc version`
+      placeholder: "0.15.0"
     validations:
       required: true
+
   - type: textarea
-    id: repro
+    id: command
     attributes:
-      label: Steps to Reproduce 
-      description: Ideally this should be a link to a repository that contains a Zine website that exhibits the problem, allowing maintainers to repro the issue simply by cloning it. 
+      label: What did you run?
+      description: The exact command, including any flags.
+      render: shell
+      placeholder: "zdoc docs docs --output public"
     validations:
       required: true
+
   - type: textarea
     id: expected
     attributes:
-      label: Describe the issue
-      description: What did go wrong? If not entirely obvious, what should Zine have done instead?
+      label: What went wrong?
+      description: >
+        What happened, and what should have happened instead? Please paste the
+        error or warning output — for documentation mode, the summary at the
+        end reporting how many warnings there were is especially useful.
     validations:
       required: true
+
+  - type: textarea
+    id: docs
+    attributes:
+      label: A minimal document that shows the problem
+      description: >
+        Please paste the smallest Markdown file that reproduces it, including
+        its first heading, rather than a link to a whole repository. How the
+        file is nested in the docs tree matters too, so mention that.
+      render: markdown
+      placeholder: |
+        # A page title
+
+        Some content that triggers the problem.
+    validations:
+      required: false
