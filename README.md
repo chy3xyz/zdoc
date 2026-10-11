@@ -75,6 +75,29 @@ Blog mode keeps Zine's `.smd` dialect, its frontmatter requirements and its
 See the [releases page](https://github.com/chy3xyz/zdoc/releases) for
 prebuilt binaries and their SHA-256 checksums.
 
+## Feedback
+
+Issues and discussions are enabled, and they answer different questions:
+
+- **[Report a bug or request a feature](https://github.com/chy3xyz/zdoc/issues/new/choose)**
+  — something does not work as expected, or you want something new. The
+  templates ask for the command you ran and a minimal document to reproduce
+  with, which is usually enough to act on.
+- **[Ask a question or start a conversation](https://github.com/chy3xyz/zdoc/discussions)**
+  — you are not sure how to do something, or want to agree on a direction
+  before doing it.
+
+The most useful feedback, if you have run this against your own documentation,
+is a document that did not survive the import. Documentation mode reports
+those as warnings rather than failing, so they are easy to miss:
+
+```bash
+zdoc docs docs
+# ... reports how many warnings, and which links could not be resolved
+```
+
+Anything listed there is a candidate for improvement.
+
 ## Contributing
 
 This is a fork of Zine. Please start a [discussion](https://github.com/chy3xyz/zdoc/discussions)
