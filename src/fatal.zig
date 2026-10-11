@@ -38,6 +38,8 @@ pub fn help() noreturn {
         \\  --title, -t TITLE   Site title (defaults to the directory name)
         \\  --base DIR          Base directory the content path is relative to
         \\  --output, -o DIR    Output directory (defaults to 'public/')
+        \\  --mermaid FILE       Vendored mermaid ESM bundle, for rendering
+        \\                      diagrams without network access
         \\  --force, -f         Ignore other files in the output directory
         \\
         \\General Options:

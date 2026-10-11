@@ -81,6 +81,7 @@ pub const DocsOptions = struct {
         var content_dir_path: ?[]const u8 = null;
         var base_dir_path: ?[]const u8 = null;
         var title: ?[]const u8 = null;
+        var mermaid: ?[]const u8 = null;
         var output_dir_path: ?[]const u8 = null;
         const build_assets: std.StringArrayHashMapUnmanaged(BuildAsset) = .empty;
         var drafts = false;
@@ -116,6 +117,12 @@ pub const DocsOptions = struct {
                 title = args[idx];
             } else if (startsWith(u8, arg, "--title=")) {
                 title = arg["--title=".len..];
+            } else if (eql(u8, arg, "--mermaid")) {
+                idx += 1;
+                if (idx >= args.len) fatal.msg("error: missing argument to '{s}'", .{arg});
+                mermaid = args[idx];
+            } else if (startsWith(u8, arg, "--mermaid=")) {
+                mermaid = arg["--mermaid=".len..];
             } else if (eql(u8, arg, "--drafts")) {
                 drafts = true;
             } else if (startsWith(u8, arg, "-")) {
@@ -164,6 +171,7 @@ pub const DocsOptions = struct {
                 .layouts_dir_path = docs.theme_layouts_path,
                 .content_dir_path = content,
                 .assets_dir_path = docs.theme_assets_path,
+                .mermaid = mermaid,
             } },
         };
 
@@ -229,6 +237,8 @@ const help_message =
     \\                      (defaults to the current directory)
     \\  --output, -o DIR    Directory where to output the website
     \\                      (defaults to 'public/')
+    \\  --mermaid FILE       Vendored mermaid ESM bundle, for rendering
+    \\                      diagrams without network access
     \\  --force, -f         Ignore other files in the output directory
     \\  --help, -h          Show this help menu
     \\

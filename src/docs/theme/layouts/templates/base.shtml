@@ -6,19 +6,10 @@
 		<title :text="$page.title"></title>
 		<link rel="stylesheet" href="$site.asset('zdoc.css').link()">
 		<script defer src="$site.asset('zdoc.js').link()"></script>
-		<!-- Mermaid is only used by a handful of pages but is ~3MB, so it is
-		     loaded from a CDN and only initialised when a diagram is present. -->
-		<script type="module">
-			import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
-			mermaid.initialize({ startOnLoad: false });
-			for (const el of document.querySelectorAll('pre.mermaid')) {
-				const { svg } = await mermaid.render(
-					'm' + Math.random().toString(36).slice(2),
-					el.textContent
-				);
-				el.innerHTML = svg;
-			}
-		</script>
+		<!-- Mermaid is only needed by pages that actually contain a diagram.
+		     The loader is generated at build time so it can point at a
+		     vendored bundle when one is configured, and at the CDN otherwise. -->
+		<script type="module" src="$site.asset('mermaid.js').link()"></script>
 		<super>
 	</head>
 	<body id="body">

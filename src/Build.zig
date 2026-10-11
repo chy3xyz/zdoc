@@ -48,6 +48,9 @@ layouts_dir: Io.Dir,
 templates: Templates = .{},
 site_assets_dir: Io.Dir,
 site_assets: Assets = .empty,
+/// Set when a vendored mermaid bundle must be installed unconditionally.
+/// Site assets are otherwise only copied when a template references them.
+install_mermaid_bundle: bool = false,
 i18n_dir: Io.Dir,
 // Translation key map. Each entry is a slice with the same length as the
 // number of variants.

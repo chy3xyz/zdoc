@@ -68,6 +68,15 @@ pub const Simple = struct {
     ///    img { height: auto; }
     ///
     image_size_attributes: ?bool = null,
+    /// Documentation mode only: path to a locally vendored mermaid ESM bundle,
+    /// relative to the base directory. When set, diagrams render without
+    /// network access instead of being fetched from a CDN. Leave null to use
+    /// the CDN.
+    ///
+    /// Download it once with:
+    ///   curl -o mermaid.esm.min.mjs \
+    ///     https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs
+    mermaid: ?[]const u8 = null,
 };
 
 pub const Multilingual = struct {
@@ -531,6 +540,14 @@ pub const Config = struct {
         };
     }
 
+    /// The locally vendored mermaid bundle, if the site has one.
+    pub fn getMermaidPath(c: *const Config) ?[]const u8 {
+        return switch (c.site) {
+            .simple => |s| s.mermaid,
+            .multilingual => null,
+        };
+    }
+
     pub fn getStaticAssets(c: *const Config) []const []const u8 {
         return switch (c.site) {
             .simple => |s| s.static_assets,
@@ -601,7 +618,7 @@ pub fn run(
     // build is loaded so that the ordinary template and asset scanners pick
     // it up, leaving rendering with a single code path.
     if (cfg.isDocs()) {
-        docs.installTheme(io, options.base_dir_path) catch |e| fatal.dir(
+        docs.installTheme(io, gpa, options.base_dir_path, cfg.getMermaidPath()) catch |e| fatal.dir(
             "built-in theme",
             e,
         );
@@ -684,6 +701,13 @@ pub fn run(
         for (asset_dir_map.keys(), asset_dir_map.values()) |k, v| {
             log.debug("[{s}] -> {}-{} ({})", .{ k, v.start, v.end, v.last_for });
         }
+
+        // The vendored mermaid bundle has no template to reference it, so it
+        // would never reach the output: site assets are only copied when
+        // something links them. Flag it so the installer copies it anyway,
+        // which is what makes the offline path work.
+        build.install_mermaid_bundle = build.cfg.isDocs() and
+            build.cfg.getMermaidPath() != null;
 
         for (build.cfg.getStaticAssets()) |path| {
             if (std.fs.path.isAbsolute(path)) {
@@ -1952,7 +1976,10 @@ pub fn run(
                 ),
             }) catch unreachable;
 
-            if (entry.value_ptr.raw > 0) {
+            const always = build.install_mermaid_bundle and
+                std.mem.eql(u8, path, docs.mermaid_bundle_name);
+
+            if (entry.value_ptr.raw > 0 or always) {
                 _ = build.site_assets_dir.updateFile(
                     io,
                     path,
