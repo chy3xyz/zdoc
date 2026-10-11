@@ -1,23 +1,81 @@
-<h1 align="center">Zine</h1>
-<h3 align="center"><em>Fast, Scalable, Flexible Static Site Generator (SSG)</em></h3>
-<p align="center">Zine is pronounced like in <a href="https://en.wikipedia.org/wiki/Zine">fan<em>zine</em></a></a>.</p>
+<h1 align="center">zdoc</h1>
+<h3 align="center"><em>Turn a folder of Markdown files into a documentation website</em></h3>
 
-## Development Status
-Zine is still a young project, not yet at feature parity with more popular
-alternatives (e.g. Hugo), but it's perfectly able to handle a personal website
-with a blog.
+`zdoc` is a fork of [Zine](https://github.com/kristoff-it/zine), a fast static
+site generator written in Zig. It adds a documentation mode built around one
+idea: the documentation you already have should build without being rewritten.
 
-## Getting Started
-Go to https://zine-ssg.io to get started.
+```bash
+zdoc docs docs
+```
 
-## GitHub Actions
-If you plan to build your website with GitHub Actions, take a look at [kristoff-it/setup-zine](https://github.com/marketplace/actions/setup-zine), the official
-GitHub Action to get access to Zine in your runner.
+That is the whole setup. No config file, no layout files, no CSS. Point it at a
+directory of Markdown and it produces a site with a sidebar derived from the
+directory tree, a table of contents on every page, syntax highlighting, task
+lists and diagrams.
 
-We also have more complete guides at https://zine-ssg.io/docs/.
+## Install
 
+Download a prebuilt binary for Linux (x86_64 or ARM64), macOS (Apple Silicon) or
+Windows from the [releases page](https://github.com/chy3xyz/zdoc/releases),
+or build from source:
+
+```bash
+zig build -Doptimize=fast
+```
+
+The Linux builds are statically linked against musl, so they run on any glibc
+or musl system without extra dependencies.
+
+## Using it
+
+```bash
+# Build a documentation site
+zdoc docs docs
+
+# Choose the output directory and the site title
+zdoc docs docs --output public --title "My Project"
+
+# Render diagrams without network access
+zdoc docs docs --mermaid mermaid.esm.min.mjs
+```
+
+The directory you point at becomes the site root: `README.md` or `index.md` at
+the top level becomes `/`, and subdirectories become nested sections.
+
+## What it handles
+
+Documents written for GitHub usually trip static site generators up. `zdoc`
+treats those as ordinary rather than as errors:
+
+- **Markdown as people write it.** `.md` files, no frontmatter required. A page's
+  title comes from its first `#` heading.
+- **GitHub-compatible anchors.** Heading ids are generated exactly as GitHub
+  generates them, so the `#anchor` links already in your documents keep working.
+- **Links that leave the docs tree.** Documentation routinely points at files
+  outside it — `../AGENTS.md`, `../examples/`. Those links are reported as
+  warnings and emitted exactly as written, instead of failing the build.
+- **Real-world Markdown.** Skipped heading levels, raw HTML, reference-style
+  links, task lists and Mermaid diagrams all render.
+
+## Blog mode
+
+Zine's original behaviour is untouched and still available:
+
+```bash
+zdoc release   # build a site from a zine.ziggy config
+zdoc           # start the development server
+```
+
+Blog mode keeps Zine's `.smd` dialect, its frontmatter requirements and its
+`zine.ziggy` config file.
+
+## Releases
+
+See the [releases page](https://github.com/chy3xyz/zdoc/releases) for
+prebuilt binaries and their SHA-256 checksums.
 
 ## Contributing
 
-- Ask before embarking on doing complicated work that might not be upstreamed.
-- No LLMs, thank you.
+This is a fork of Zine. Please start a [discussion](https://github.com/chy3xyz/zdoc/discussions)
+before taking on anything substantial, so the direction can be agreed first.
