@@ -16,6 +16,7 @@ const tracy = @import("tracy");
 const root = @import("../root.zig");
 const fatal = @import("../fatal.zig");
 const render = @import("../render.zig");
+const docs = @import("../docs.zig");
 const Signature = @import("doctypes.zig").Signature;
 const DateTime = @import("DateTime.zig");
 const context = @import("../context.zig");
@@ -44,8 +45,13 @@ pub const ziggy_options: ziggy.Options(Page) = .{
 title: []const u8 = "",
 description: []const u8 = "",
 authors: []const []const u8 = &.{},
-date: DateTime,
-layout: []const u8,
+/// Defaults to the Unix epoch so that pages without an explicit date sort
+/// stably instead of failing to deserialize. In docs mode every page has this
+/// value, which is why docs mode sorts by path rather than by date.
+date: DateTime = .{ ._raw = .{ .unix = 0 } },
+/// The layout this page renders with. Docs mode fills in the built-in
+/// documentation layout when a page does not pick one.
+layout: []const u8 = "",
 draft: bool = false,
 tags: []const []const u8 = &.{},
 aliases: []const []const u8 = &.{},
@@ -109,6 +115,12 @@ _parse: struct {
 _analysis: struct {
     frontmatter: std.ArrayList(FrontmatterAnalysisError) = .empty,
     page: std.ArrayList(PageAnalysisError) = .empty,
+    /// Parse errors that docs mode tolerates. Reported as warnings so that a
+    /// real problem is still visible without blocking the build.
+    warnings: []supermd.Ast.Error = &.{},
+    /// Link problems that docs mode tolerates. Each of these has already had
+    /// its link rewritten to pass through verbatim.
+    link_warnings: std.ArrayList(PageAnalysisError) = .empty,
 } = .{},
 
 // Valid if analysis contains no errors and build mode == .memory
@@ -376,7 +388,68 @@ pub fn parse(
     const debug = p._debug;
     defer p._debug = debug;
 
-    const ziggy_start = (std.mem.indexOf(u8, full_src, "---") orelse {
+    // Frontmatter must open the document. Zine's blog dialect searches for
+    // `---` anywhere, which misfires on ordinary Markdown containing `---`
+    // table separators or horizontal rules, so docs mode requires the
+    // delimiter on the first line of the file. Documentation with no
+    // frontmatter at all is the common case, not an error.
+    const frontmatter_start: ?usize = blk: {
+        if (!cfg.isDocs()) {
+            break :blk (std.mem.indexOf(u8, full_src, "---") orelse break :blk null) + "---".len;
+        }
+
+        // A file may start with leading whitespace; `trimmed_left` skips it.
+        const lead = full_src.len - trimmed_left.len;
+        if (!std.mem.startsWith(u8, trimmed_left, "---")) break :blk null;
+        const after = trimmed_left["---".len..];
+        const line_end = std.mem.indexOfScalar(u8, after, '\n') orelse after.len;
+        // The rest of the delimiter's line must be blank.
+        if (std.mem.trim(u8, after[0..line_end], &std.ascii.whitespace).len != 0) {
+            break :blk null;
+        }
+        const has_newline: usize = if (line_end == after.len) 0 else 1;
+        const consumed: usize = "---".len + has_newline;
+        break :blk lead + consumed;
+    };
+
+    const ziggy_start = frontmatter_start orelse {
+        // No frontmatter. In docs mode this is the common case: the page is
+        // all markdown, and its title comes from the first H1.
+        if (cfg.isDocs()) {
+            p.* = .{
+                .date = .{ ._raw = .{ .unix = 0 } },
+                .layout = "",
+                ._parse = .{
+                    .active = true,
+                    .forbid_subsections = false,
+                    .arena = arena_state.state,
+                    .full_src = full_src,
+                    .status = .parsed,
+                    .ziggy_start = 0,
+                    .ziggy_doc = .{ .end = 0, .lines = 0 },
+                    .ast = undefined,
+                },
+            };
+            const ast = supermd.Ast.init(gpa, full_src, cmark, .{
+                .auto_target_blank = cfg.supermd.auto_target_blank,
+            }) catch fatal.oom();
+            p._parse.ast = ast;
+            p._analysis.warnings = docs.postProcess(
+                gpa,
+                &p._parse.ast,
+            ) catch fatal.oom();
+
+            if (p.title.len == 0) {
+                p.title = docs.titleFromHeadings(gpa, &p._parse.ast) catch |err| switch (err) {
+                    error.OutOfMemory => fatal.oom(),
+                } orelse std.fs.path.stem(
+                    p._scan.file.name.slice(&variant.string_table),
+                );
+            }
+            if (p.layout.len == 0) p.layout = docs.default_layout;
+            return;
+        }
+
         // missing frontmatter
         p.* = .{
             .date = .{ ._raw = .{ .unix = 0 } },
@@ -393,7 +466,7 @@ pub fn parse(
             },
         };
         return;
-    }) + "---".len;
+    };
 
     var meta: ziggy.Deserializer.Meta = .init;
     const opts: ziggy.Deserializer.Options = .{ .delimiter = .{ .dashes = @intCast(ziggy_start) } };
@@ -438,6 +511,18 @@ pub fn parse(
         .ast = ast,
         .status = .parsed,
     };
+
+    // Docs-mode pages are not required to declare a layout or a title, and
+    // fall back to the built-in documentation layout and the first H1.
+    if (cfg.isDocs()) {
+        p._analysis.warnings = docs.postProcess(gpa, &p._parse.ast) catch fatal.oom();
+        if (p.layout.len == 0) p.layout = docs.default_layout;
+        if (p.title.len == 0) {
+            p.title = docs.titleFromHeadings(gpa, &p._parse.ast) catch |err| switch (err) {
+                error.OutOfMemory => fatal.oom(),
+            } orelse "";
+        }
+    }
 
     p.date.load() catch |err| {
         p._parse.date_err = err;

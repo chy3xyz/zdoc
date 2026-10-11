@@ -19,6 +19,9 @@ const Command = enum {
     @"install-schemas",
     release,
     debug,
+    /// Build a documentation site from a directory of Markdown files, with no
+    /// config file. The entry point this fork exists to provide.
+    docs,
     help,
     @"-h",
     @"--help",
@@ -119,6 +122,7 @@ pub fn main(init: std.process.Init) u8 {
         .init => @import("cli/init.zig").init(io, gpa, args[2..]),
         .release => @import("cli/release.zig").release(io, gpa, args[2..]),
         .debug => @import("cli/debug.zig").debug(io, gpa, args[2..]),
+        .docs => @import("cli/docs.zig").docsCommand(io, gpa, args[2..]),
         .@"install-schemas" => @import("cli/install-schemas.zig").install_schemas(io, gpa, args[2..]),
         .help, .@"-h", .@"--help" => fatal.help(),
         .version, .@"-v", .@"--version" => printVersion(),
@@ -135,6 +139,7 @@ pub fn main(init: std.process.Init) u8 {
 }
 
 fn printVersion() noreturn {
-    std.debug.print("{s}\n", .{options.version});
+    // This fork is zdoc; the underlying static site generator is Zine.
+    std.debug.print("zdoc {s}\n", .{options.version});
     std.process.exit(0);
 }

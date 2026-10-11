@@ -13,7 +13,7 @@ body:
     id: version
     attributes:
       label: Zine Version
-      description: "The output of `zine version`"
+      description: "The output of `zdoc version`"
       placeholder: "0.10.3"
     validations:
       required: true

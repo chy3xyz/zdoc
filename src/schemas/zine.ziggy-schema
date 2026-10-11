@@ -9,6 +9,12 @@ struct Config {
     zine_version: bytes,
     /// SuperMD content rendering settings
     supermd: ?SuperMd,
+    /// Selects the content-authoring dialect. Either 'blog' (Zine's original
+    /// behaviour: '.smd' pages with mandatory frontmatter) or 'docs' (plain
+    /// Markdown trees written for GitHub: '.md' pages, optional frontmatter,
+    /// page titles taken from the first H1, and recoverable problems reported
+    /// as warnings instead of errors).
+    mode: ?bytes,
     /// Your website definition
     site: Site,
     /// User-defined properties that you can reference from SuperHTML via

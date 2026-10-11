@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head id="head">
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title :text="$page.title"></title>
+		<link rel="stylesheet" href="$site.asset('zdoc.css').link()">
+		<script defer src="$site.asset('zdoc.js').link()"></script>
+		<!-- Mermaid is only used by a handful of pages but is ~3MB, so it is
+		     loaded from a CDN and only initialised when a diagram is present. -->
+		<script type="module">
+			import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+			mermaid.initialize({ startOnLoad: false });
+			for (const el of document.querySelectorAll('pre.mermaid')) {
+				const { svg } = await mermaid.render(
+					'm' + Math.random().toString(36).slice(2),
+					el.textContent
+				);
+				el.innerHTML = svg;
+			}
+		</script>
+		<super>
+	</head>
+	<body id="body">
+		<div class="layout">
+			<nav class="sidebar" id="sidebar">
+				<a class="sidebar__title" href="$site.index().link()" :text="$site.title"></a>
+				<super>
+			</nav>
+			<main class="content" id="main">
+				<article class="doc" :html="$page.content()"></article>
+			</main>
+			<aside class="toc" id="toc">
+				<div class="toc__title">On this page</div>
+				<super>
+			</aside>
+		</div>
+	</body>
+</html>

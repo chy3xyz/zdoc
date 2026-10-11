@@ -1,0 +1,25 @@
+<extend template="base.shtml">
+<head id="head">
+</head>
+<nav id="sidebar">
+	<div class="sidebar__group">Contents</div>
+	<ul class="sidebar__list">
+		<!-- On a section index, list that section's pages; otherwise list the
+		     section this page belongs to, so the reader keeps their bearings
+		     either way. `subpagesAlphabetic` sorts by title, which is what a
+		     reader expects from documentation. -->
+		<ctx :if="$page.isSection()">
+			<li :loop="$page.subpagesAlphabetic()">
+				<a class="sidebar__link" href="$loop.it.link()" :text="$loop.it.title"></a>
+			</li>
+		</ctx>
+		<ctx :if="$page.isSection().not()">
+			<li :loop="$page.parentSection().subpagesAlphabetic()">
+				<a class="sidebar__link" href="$loop.it.link()" :text="$loop.it.title"></a>
+			</li>
+		</ctx>
+	</ul>
+</nav>
+<aside id="toc">
+	<div :html="$page.toc()"></div>
+</aside>

@@ -26,17 +26,25 @@ pub fn help() noreturn {
         \\
         \\Commands:
         \\  (no command)       Start the development web server
+        \\  docs <dir>         Build a documentation site from a directory of
+        \\                     Markdown files, with no config file required
         \\  init               Initialize a Zine site in the current directory
         \\  install-schemas    Install up-to-date Ziggy Schemas for editor support
         \\  release            Create a release of a Zine site
         \\  help               Show this menu and exit
         \\  version            Print the Zine version and exit
         \\
+        \\Documentation options:
+        \\  --title, -t TITLE   Site title (defaults to the directory name)
+        \\  --base DIR          Base directory the content path is relative to
+        \\  --output, -o DIR    Output directory (defaults to 'public/')
+        \\  --force, -f         Ignore other files in the output directory
+        \\
         \\General Options:
         \\  --drafts           Enable draft pages
         \\  --help, -h         Print command specific usage and extra options
         \\
-        \\Development web server options: 
+        \\Development web server options:
         \\  --host HOST             Listening host (default 'localhost')
         \\  --port PORT             Listening port (default 1990)
         \\  --debounce <ms>         Rebuild delay after a file change (default 25)

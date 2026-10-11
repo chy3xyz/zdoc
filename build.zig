@@ -68,41 +68,41 @@ pub const Options = struct {
 
 /// Builds a Zine website.
 pub fn website(project: *std.Build, opts: Options) *std.Build.Step.Run {
-    const zine_dep = project.dependencyFromBuildZig(@This(), .{
+    const zdoc_dep = project.dependencyFromBuildZig(@This(), .{
         .optimize = opts.debug.optimize,
         .scope = opts.debug.scopes,
         .@"no-git-version" = true,
     });
 
-    const run_zine = switch (opts.zine) {
-        .source => project.addRunArtifact(zine_dep.artifact("zine")),
-        .path => |path| project.addSystemCommand(&.{path orelse "zine"}),
+    const run_zdoc = switch (opts.zine) {
+        .source => project.addRunArtifact(zdoc_dep.artifact("zdoc")),
+        .path => |path| project.addSystemCommand(&.{path orelse "zdoc"}),
     };
-    run_zine.setCwd(opts.website_root orelse project.path("."));
-    run_zine.addArg("release");
+    run_zdoc.setCwd(opts.website_root orelse project.path("."));
+    run_zdoc.addArg("release");
 
-    if (opts.force) run_zine.addArg("--force");
-    run_zine.addPrefixedFileArg("--output=", project.graph.path(.install_prefix, opts.output_path));
-    // _ = run_zine.addPrefixedOutputDirectoryArg("--output=", opts.output_path);
+    if (opts.force) run_zdoc.addArg("--force");
+    run_zdoc.addPrefixedFileArg("--output=", project.graph.path(.install_prefix, opts.output_path));
+    // _ = run_zdoc.addPrefixedOutputDirectoryArg("--output=", opts.output_path);
 
     for (opts.build_assets) |a| {
-        run_zine.addArg(project.fmt("--build-asset={s}", .{a.name}));
-        run_zine.addFileArg(a.lp);
+        run_zdoc.addArg(project.fmt("--build-asset={s}", .{a.name}));
+        run_zdoc.addFileArg(a.lp);
         if (a.install_always) {
             const install_path = a.install_path orelse std.debug.panic(
                 "Build assets '{s}' specifies install_always = true  " ++
                     "but defines no install path.",
                 .{a.name},
             );
-            run_zine.addArg(project.fmt("--install-always={s}", .{
+            run_zdoc.addArg(project.fmt("--install-always={s}", .{
                 install_path,
             }));
         } else if (a.install_path) |ip| {
-            run_zine.addArg(project.fmt("--install={s}", .{ip}));
+            run_zdoc.addArg(project.fmt("--install={s}", .{ip}));
         }
     }
 
-    return run_zine;
+    return run_zdoc;
 }
 
 /// Serves a Zine website via the Zine live server, allowing you to edit
@@ -111,37 +111,37 @@ pub fn website(project: *std.Build, opts: Options) *std.Build.Step.Run {
 ///
 /// Ignores `opts.output_path` as it keeps all generated files in memory.
 pub fn serve(project: *std.Build, opts: Options) *std.Build.Step.Run {
-    const zine_dep = project.dependencyFromBuildZig(@This(), .{
+    const zdoc_dep = project.dependencyFromBuildZig(@This(), .{
         .optimize = opts.debug.optimize,
         .scope = opts.debug.scopes,
         .@"no-git-version" = true,
     });
 
-    const run_zine = switch (opts.zine) {
-        .source => project.addRunArtifact(zine_dep.artifact("zine")),
-        .path => |path| project.addSystemCommand(&.{path orelse "zine"}),
+    const run_zdoc = switch (opts.zine) {
+        .source => project.addRunArtifact(zdoc_dep.artifact("zdoc")),
+        .path => |path| project.addSystemCommand(&.{path orelse "zdoc"}),
     };
 
-    run_zine.setCwd(opts.website_root orelse project.path("."));
+    run_zdoc.setCwd(opts.website_root orelse project.path("."));
 
     for (opts.build_assets) |a| {
-        run_zine.addArg(project.fmt("--build-asset={s}", .{a.name}));
-        run_zine.addFileArg(a.lp);
+        run_zdoc.addArg(project.fmt("--build-asset={s}", .{a.name}));
+        run_zdoc.addFileArg(a.lp);
         if (a.install_always) {
             const install_path = a.install_path orelse std.debug.panic(
                 "Build assets '{s}' specifies output_always = true  " ++
                     "but defines no install path.",
                 .{a.name},
             );
-            run_zine.addArg(project.fmt("--install-always={s}", .{
+            run_zdoc.addArg(project.fmt("--install-always={s}", .{
                 install_path,
             }));
         } else if (a.install_path) |ip| {
-            run_zine.addArg(project.fmt("--install={s}", .{ip}));
+            run_zdoc.addArg(project.fmt("--install={s}", .{ip}));
         }
     }
 
-    return run_zine;
+    return run_zdoc;
 }
 
 pub fn build(b: *std.Build) !void {
@@ -180,7 +180,7 @@ pub fn build(b: *std.Build) !void {
         "Include treesitter grammars for build-time syntax highlighting (enabled by default). Disabling reduces executable size significantly.",
     ) orelse true;
 
-    const zine_mod = b.createModule(.{
+    const zdoc_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -194,9 +194,9 @@ pub fn build(b: *std.Build) !void {
     });
 
     // This is this up because otherwise lazy deps will hide the existence of this artifact
-    const zine_exe = b.addExecutable(.{
-        .name = "zine",
-        .root_module = zine_mod,
+    const zdoc_exe = b.addExecutable(.{
+        .name = "zdoc",
+        .root_module = zdoc_mod,
     });
 
     const tracy = b.dependency("tracy", .{ .enable = enable_tracy });
@@ -210,7 +210,7 @@ pub fn build(b: *std.Build) !void {
     const options = blk: {
         const options = b.addOptions();
         try options.contents.print(b.allocator,
-            \\// module = zine
+            \\// module = zdoc
             \\const std = @import("std");
             \\pub const tsan = {};
             \\pub const enable_treesitter = {};
@@ -315,7 +315,7 @@ pub fn build(b: *std.Build) !void {
         .netbsd => {},
         .freebsd => {
             // only required for FreeBSD < 15
-            // zine_exe.linkSystemLibrary("inotify");
+            // zdoc_exe.linkSystemLibrary("inotify");
         },
         .windows => {},
         .macos => {
@@ -327,51 +327,66 @@ pub fn build(b: *std.Build) !void {
             });
 
             const frameworks = b.lazyDependency("frameworks", .{}) orelse return;
-            zine_mod.addIncludePath(frameworks.path("include"));
-            zine_mod.addFrameworkPath(frameworks.path("Frameworks"));
-            zine_mod.addLibraryPath(frameworks.path("lib"));
-            zine_mod.linkFramework("CoreServices", .{});
+            zdoc_mod.addIncludePath(frameworks.path("include"));
+            zdoc_mod.addFrameworkPath(frameworks.path("Frameworks"));
+            zdoc_mod.addLibraryPath(frameworks.path("lib"));
+            zdoc_mod.linkFramework("CoreServices", .{});
             t.addIncludePath(frameworks.path("include"));
             t.addFrameworkPath(frameworks.path("Frameworks"));
             t.mod.addLibraryPath(frameworks.path("lib"));
             t.mod.linkFramework("CoreServices", .{});
-            zine_mod.addImport("c", t.mod);
+            zdoc_mod.addImport("c", t.mod);
         },
     }
 
-    zine_mod.addImport("ziggy", ziggy);
-    zine_mod.addImport("scripty", scripty);
-    zine_mod.addImport("supermd", supermd);
-    zine_mod.addImport("superhtml", superhtml);
-    zine_mod.addImport("zeit", zeit);
-    zine_mod.addImport("options", options);
-    zine_mod.addImport("tracy", tracy.module("tracy"));
-    zine_mod.addImport("mime", mime.module("mime"));
-    zine_mod.addImport("wuffs", wuffs.module("wuffs"));
+    zdoc_mod.addImport("ziggy", ziggy);
+    zdoc_mod.addImport("scripty", scripty);
+    zdoc_mod.addImport("supermd", supermd);
+    zdoc_mod.addImport("superhtml", superhtml);
+    zdoc_mod.addImport("zeit", zeit);
+    zdoc_mod.addImport("options", options);
+    zdoc_mod.addImport("tracy", tracy.module("tracy"));
+    zdoc_mod.addImport("mime", mime.module("mime"));
+    zdoc_mod.addImport("wuffs", wuffs.module("wuffs"));
     if (highlight) {
-        zine_mod.addImport("syntax", syntax.module("syntax"));
-        zine_mod.addImport("treez", treez);
+        zdoc_mod.addImport("syntax", syntax.module("syntax"));
+        zdoc_mod.addImport("treez", treez);
     }
 
-    const check = b.step("check", "check the standalone zine executable");
-    check.dependOn(&zine_exe.step);
-    b.installArtifact(zine_exe);
+    const check = b.step("check", "check the standalone zdoc executable");
+    check.dependOn(&zdoc_exe.step);
+    b.installArtifact(zdoc_exe);
 
-    const run_step = b.step("run", "run the standalone zine executable");
-    const zine_run = b.addRunArtifact(zine_exe);
-    zine_run.setCwd(b.path("standalone-test"));
-    zine_run.addPassthruArgs();
-    run_step.dependOn(&zine_run.step);
+    const run_step = b.step("run", "run the standalone zdoc executable");
+    const zdoc_run = b.addRunArtifact(zdoc_exe);
+    zdoc_run.setCwd(b.path("standalone-test"));
+    zdoc_run.addPassthruArgs();
+    run_step.dependOn(&zdoc_run.step);
 
     const test_step = b.step("test", "build snapshot tests and diff the results");
-    setupSchemaCheck(b, target, zine_mod, test_step);
-    try setupSnapshotTesting(b, target, zine_exe, test_step);
+    setupSchemaCheck(b, target, zdoc_mod, test_step);
+    try setupSnapshotTesting(b, target, zdoc_exe, test_step);
+    setupUnitTests(b, test_step);
+}
+
+/// The slugger is pure Zig with no dependency on the rest of the codebase, so
+/// it is tested directly. `slug_corpus_test.zig` pins the algorithm against the
+/// anchors present in a real documentation corpus.
+fn setupUnitTests(b: *std.Build, test_step: *std.Build.Step) void {
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docs/slug_corpus_test.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 }
 
 fn setupSchemaCheck(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    zine_mod: *std.Build.Module,
+    zdoc_mod: *std.Build.Module,
     test_step: *std.Build.Step,
 ) void {
     {
@@ -379,7 +394,7 @@ fn setupSchemaCheck(
         const types_mod = b.createModule(.{
             .root_source_file = b.path("src/schemas/zine.zig"),
         });
-        types_mod.addImport("zine", zine_mod);
+        types_mod.addImport("zine", zdoc_mod);
 
         const ziggy = @import("ziggy");
         const check_step = ziggy.addTypeCheckStep(b, target, .debug, types_mod, schema);
@@ -391,7 +406,7 @@ fn setupSchemaCheck(
         const types_mod = b.createModule(.{
             .root_source_file = b.path("src/schemas/page.zig"),
         });
-        types_mod.addImport("zine", zine_mod);
+        types_mod.addImport("zine", zdoc_mod);
 
         const ziggy = @import("ziggy");
         const check_step = ziggy.addTypeCheckStep(b, target, .debug, types_mod, schema);
@@ -402,7 +417,7 @@ fn setupSchemaCheck(
 fn setupSnapshotTesting(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    zine_exe: *std.Build.Step.Compile,
+    zdoc_exe: *std.Build.Step.Compile,
     test_step: *std.Build.Step,
 ) !void {
     const camera = b.addExecutable(.{
@@ -445,7 +460,7 @@ fn setupSnapshotTesting(
             });
 
             const run_camera = b.addRunArtifact(camera);
-            run_camera.addArtifactArg(zine_exe);
+            run_camera.addArtifactArg(zdoc_exe);
             run_camera.addArg("debug");
             run_camera.setCwd(b.path(path));
             run_camera.has_side_effects = true;
@@ -481,20 +496,20 @@ fn setupSnapshotTesting(
 
             _ = b.run(&.{ "rm", "-rf", snapshot_path });
 
-            const run_zine = b.addRunArtifact(zine_exe);
-            run_zine.addArg("release");
-            run_zine.addArg("--force");
-            run_zine.addArg("--output=snapshot");
-            run_zine.setCwd(b.path(src_path));
-            run_zine.has_side_effects = true;
+            const run_zdoc = b.addRunArtifact(zdoc_exe);
+            run_zdoc.addArg("release");
+            run_zdoc.addArg("--force");
+            run_zdoc.addArg("--output=snapshot");
+            run_zdoc.setCwd(b.path(src_path));
+            run_zdoc.has_side_effects = true;
 
-            const stderr_out = run_zine.captureStdErr(.{});
+            const stderr_out = run_zdoc.captureStdErr(.{});
             const update_snap = b.addUpdateSourceFiles();
             update_snap.addCopyFileToSource(stderr_out, b.pathJoin(
                 &.{ src_path, "snapshot.txt" },
             ));
 
-            update_snap.step.dependOn(&run_zine.step);
+            update_snap.step.dependOn(&run_zdoc.step);
             git_add.step.dependOn(&update_snap.step);
         }
     }
@@ -521,21 +536,21 @@ fn setupSnapshotTesting(
 
             _ = b.run(&.{ "rm", "-rf", snapshot_path });
 
-            const run_zine = b.addRunArtifact(zine_exe);
-            run_zine.addArg("release");
-            run_zine.addArg("--drafts");
-            run_zine.addArg("--force");
-            run_zine.addArg("--output=snapshot");
-            run_zine.setCwd(b.path(src_path));
-            run_zine.has_side_effects = true;
+            const run_zdoc = b.addRunArtifact(zdoc_exe);
+            run_zdoc.addArg("release");
+            run_zdoc.addArg("--drafts");
+            run_zdoc.addArg("--force");
+            run_zdoc.addArg("--output=snapshot");
+            run_zdoc.setCwd(b.path(src_path));
+            run_zdoc.has_side_effects = true;
 
-            const stderr_out = run_zine.captureStdErr(.{});
+            const stderr_out = run_zdoc.captureStdErr(.{});
             const update_snap = b.addUpdateSourceFiles();
             update_snap.addCopyFileToSource(stderr_out, b.pathJoin(
                 &.{ src_path, "snapshot.txt" },
             ));
 
-            update_snap.step.dependOn(&run_zine.step);
+            update_snap.step.dependOn(&run_zdoc.step);
             git_add.step.dependOn(&update_snap.step);
         }
     }
@@ -626,7 +641,7 @@ fn setupReleaseStep(
         const options = blk: {
             const options = b.addOptions();
             options.contents.print(b.allocator,
-                \\// module = zine
+                \\// module = zdoc
                 \\const std = @import("std");
                 \\pub const tsan = false;
                 \\pub const enable_treesitter = true;
@@ -644,8 +659,8 @@ fn setupReleaseStep(
             .optimize = optimize,
         });
 
-        const zine_exe_release = b.addExecutable(.{
-            .name = "zine",
+        const zdoc_exe_release = b.addExecutable(.{
+            .name = "zdoc",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = target,
@@ -653,17 +668,17 @@ fn setupReleaseStep(
             }),
         });
 
-        zine_exe_release.root_module.addImport("options", options);
-        zine_exe_release.root_module.addImport("ziggy", ziggy);
-        zine_exe_release.root_module.addImport("scripty", scripty);
-        zine_exe_release.root_module.addImport("supermd", supermd);
-        zine_exe_release.root_module.addImport("superhtml", superhtml);
-        zine_exe_release.root_module.addImport("zeit", zeit);
-        zine_exe_release.root_module.addImport("syntax", syntax.module("syntax"));
-        zine_exe_release.root_module.addImport("treez", treez);
-        zine_exe_release.root_module.addImport("tracy", tracy.module("tracy"));
-        zine_exe_release.root_module.addImport("mime", mime.module("mime"));
-        zine_exe_release.root_module.addImport("wuffs", wuffs.module("wuffs"));
+        zdoc_exe_release.root_module.addImport("options", options);
+        zdoc_exe_release.root_module.addImport("ziggy", ziggy);
+        zdoc_exe_release.root_module.addImport("scripty", scripty);
+        zdoc_exe_release.root_module.addImport("supermd", supermd);
+        zdoc_exe_release.root_module.addImport("superhtml", superhtml);
+        zdoc_exe_release.root_module.addImport("zeit", zeit);
+        zdoc_exe_release.root_module.addImport("syntax", syntax.module("syntax"));
+        zdoc_exe_release.root_module.addImport("treez", treez);
+        zdoc_exe_release.root_module.addImport("tracy", tracy.module("tracy"));
+        zdoc_exe_release.root_module.addImport("mime", mime.module("mime"));
+        zdoc_exe_release.root_module.addImport("wuffs", wuffs.module("wuffs"));
 
         switch (target.result.os.tag) {
             else => @panic("target must be added to build.zig"),
@@ -671,7 +686,7 @@ fn setupReleaseStep(
             .netbsd => {},
             .freebsd => {
                 // only required for FreeBSD < 15
-                // zine_exe_release.linkSystemLibrary("inotify");
+                // zdoc_exe_release.linkSystemLibrary("inotify");
             },
             .windows => {},
             .macos => {
@@ -679,16 +694,16 @@ fn setupReleaseStep(
                     .target = target,
                     .optimize = optimize,
                 }) orelse return;
-                zine_exe_release.root_module.addIncludePath(frameworks.path("include"));
-                zine_exe_release.root_module.addFrameworkPath(frameworks.path("Frameworks"));
-                zine_exe_release.root_module.addLibraryPath(frameworks.path("lib"));
-                zine_exe_release.root_module.linkFramework("CoreServices", .{});
+                zdoc_exe_release.root_module.addIncludePath(frameworks.path("include"));
+                zdoc_exe_release.root_module.addFrameworkPath(frameworks.path("Frameworks"));
+                zdoc_exe_release.root_module.addLibraryPath(frameworks.path("lib"));
+                zdoc_exe_release.root_module.linkFramework("CoreServices", .{});
                 tr.addIncludePath(frameworks.path("include"));
                 tr.addFrameworkPath(frameworks.path("Frameworks"));
                 tr.mod.addLibraryPath(frameworks.path("lib"));
                 tr.mod.linkFramework("CoreServices", .{});
 
-                zine_exe_release.root_module.addImport("c", tr.mod);
+                zdoc_exe_release.root_module.addImport("c", tr.mod);
             },
         }
 
@@ -706,7 +721,7 @@ fn setupReleaseStep(
                     "-j",
                 });
                 const archive = zip.addOutputFileArg(archive_name);
-                zip.addDirectoryArg(zine_exe_release.getEmittedBin());
+                zip.addDirectoryArg(zdoc_exe_release.getEmittedBin());
                 _ = zip.captureStdOut(.{});
 
                 release_step.dependOn(&b.addInstallFileWithDir(
@@ -728,8 +743,8 @@ fn setupReleaseStep(
                 const archive = tar.addOutputFileArg(archive_name);
                 tar.addArg("-C");
 
-                tar.addDirectoryArg(zine_exe_release.getEmittedBinDirectory());
-                tar.addArg("zine");
+                tar.addDirectoryArg(zdoc_exe_release.getEmittedBinDirectory());
+                tar.addArg("zdoc");
                 _ = tar.captureStdOut(.{});
 
                 release_step.dependOn(&b.addInstallFileWithDir(
@@ -787,7 +802,7 @@ fn getVersion(b: *std.Build, no_git_version: bool) []const u8 {
             {
                 if (zon_version.order(git_version) != .gt) {
                     std.debug.panic(
-                        "zine maintainers: bump up zine version to '{s}-dev' in build.zig.zon!",
+                        "zdoc maintainers: bump up the zdoc version to '{s}-dev' in build.zig.zon!",
                         .{zon.version},
                     );
                 }

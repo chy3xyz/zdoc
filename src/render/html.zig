@@ -14,6 +14,34 @@ const Path = PathTable.Path;
 const PathName = PathTable.PathName;
 const HtmlSafe = @import("superhtml").HtmlSafe;
 
+/// Returns whether this list item is a GFM task list entry, and whether it is
+/// checked.
+///
+/// cmark's tasklist extension consumes the `[ ]` / `[x]` marker and records the
+/// state on the node, reachable only through the C API. Reading the flag alone
+/// is not enough: it returns false both for an *unchecked* task item and for an
+/// ordinary list item, and those need different markup.
+///
+/// The write side of the same API distinguishes them. cmark only accepts the
+/// write for nodes the tasklist extension owns, so setting the flag and reading
+/// it back is a reliable membership test. The original value is restored so
+/// rendering has no side effect on the document.
+const TaskState = struct {
+    is_task: bool,
+    checked: bool,
+};
+
+fn taskState(node: supermd.Node) TaskState {
+    const checked = c.cmark_gfm_extensions_get_tasklist_item_checked(node.n);
+    if (checked) return .{ .is_task = true, .checked = true };
+
+    _ = c.cmark_gfm_extensions_set_tasklist_item_checked(node.n, true);
+    const is_task = c.cmark_gfm_extensions_get_tasklist_item_checked(node.n);
+    _ = c.cmark_gfm_extensions_set_tasklist_item_checked(node.n, false);
+
+    return .{ .is_task = is_task, .checked = false };
+}
+
 const log = std.log.scoped(.render);
 
 pub fn html(
@@ -121,7 +149,19 @@ pub fn html(
                 }),
             },
             .ITEM => switch (ev.dir) {
-                .enter => try w.print("<li>", .{}),
+                .enter => {
+                    // A task list item carries its state on the node rather
+                    // than in its text, so render the checkbox here.
+                    const task = taskState(node);
+                    if (task.is_task) {
+                        try w.print(
+                            "<li class=\"task-list-item\"><input type=\"checkbox\" disabled{s}>",
+                            .{if (task.checked) " checked" else ""},
+                        );
+                    } else {
+                        try w.print("<li>", .{});
+                    }
+                },
                 .exit => try w.print("</li>", .{}),
             },
             .HTML_BLOCK => switch (ev.dir) {
@@ -321,6 +361,14 @@ pub fn html(
                                 try w.writeAll(code);
                                 try w.writeAll("</script>");
                                 continue;
+                            } else if (std.mem.eql(u8, lang_name, "mermaid")) {
+                                // Diagrams are drawn by mermaid.js in the
+                                // browser, so emit the source as a plain block
+                                // rather than trying to highlight it here.
+                                try w.print("<pre class=\"mermaid\">{f}</pre>", .{
+                                    HtmlSafe{ .bytes = code },
+                                });
+                                continue;
                             }
 
                             try w.print("<pre><code class=\"{s}\">", .{lang_name});
@@ -338,9 +386,17 @@ pub fn html(
                                     error.OutOfMemory,
                                     error.WriteFailed,
                                     => |e| return e,
-                                    // Already validated in analyzePage
-                                    error.NoLanguage => unreachable,
-                                    error.Unknown => unreachable,
+                                    // Normally unreachable, because the
+                                    // language was validated during analysis.
+                                    // In docs mode that check is a warning
+                                    // rather than an error, so an unsupported
+                                    // language can reach this point. Fall back
+                                    // to emitting the code unhighlighted rather
+                                    // than crashing the build: documentation
+                                    // uses languages the highlighter may not
+                                    // know, and losing colours is a much better
+                                    // outcome than losing the page.
+                                    error.NoLanguage, error.Unknown => {},
                                 };
                             }
 

@@ -3,6 +3,7 @@ const log = std.log.scoped(.run);
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const docs = @import("docs.zig");
 const Writer = std.Io.Writer;
 const Component = std.Uri.Component;
 const builtin = @import("builtin");
@@ -22,6 +23,12 @@ const PathName = PathTable.PathName;
 
 pub var progress_buf: [4096]u8 = undefined;
 pub var progress: std.Progress.Node = undefined;
+
+/// True when the site is being built in documentation mode. Set once from the
+/// loaded config before the build starts. Content scanning runs on worker
+/// threads that have no access to the config, so this mirrors how `progress`
+/// is already shared process-wide.
+pub var docsModeEnabled: bool = false;
 
 pub const Simple = struct {
     /// Title of the website
@@ -155,11 +162,19 @@ pub const Site = union(enum) {
 pub const Config = struct {
     zine_version: []const u8,
     supermd: SuperMd = .{},
+    /// Selects the content-authoring dialect. 'blog' (the default) is Zine's
+    /// original behaviour; 'docs' targets plain Markdown trees written for
+    /// GitHub.
+    mode: []const u8 = "blog",
     site: Site,
     custom: ziggy.Dictionary(ziggy.Dynamic) = .empty,
 
     const config_file_basename = "zine.ziggy";
     pub const Search = union(enum) { auto, path: []const u8 };
+
+    pub fn isDocs(self: *const Config) bool {
+        return std.mem.eql(u8, self.mode, "docs");
+    }
 
     pub const SuperMd = struct {
         headings_h2: bool = false,
@@ -500,12 +515,16 @@ pub const Config = struct {
     }
 
     pub fn getLayoutsDirPath(c: *const Config) []const u8 {
+        // Docs mode ships a built-in theme, so the configured layouts
+        // directory is replaced by the one the theme is materialized into.
+        if (c.isDocs()) return docs.theme_layouts_path;
         return switch (c.site) {
             .simple => |s| s.layouts_dir_path,
             .multilingual => |m| m.layouts_dir_path,
         };
     }
     pub fn getAssetsDirPath(c: *const Config) []const u8 {
+        if (c.isDocs()) return docs.theme_assets_path;
         return switch (c.site) {
             .simple => |s| s.assets_dir_path,
             .multilingual => |m| m.assets_dir_path,
@@ -572,9 +591,21 @@ pub fn run(
 ) error{ OutOfMemory, WriteFailed }!Build {
     assert(worker.started);
 
+    docsModeEnabled = cfg.isDocs();
+
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+
+    // Docs mode ships with a built-in theme. It is materialized before the
+    // build is loaded so that the ordinary template and asset scanners pick
+    // it up, leaving rendering with a single code path.
+    if (cfg.isDocs()) {
+        docs.installTheme(io, options.base_dir_path) catch |e| fatal.dir(
+            "built-in theme",
+            e,
+        );
+    }
 
     var build: Build = blk: {
         const tracy_frame = tracy.namedFrame("load build");
@@ -904,11 +935,17 @@ pub fn run(
 
                 pages_to_parse += s.pages.items.len;
 
-                const index_smd: String = @enumFromInt(1);
-                assert(v.string_table.get("index.smd").? == index_smd);
+                // Every index page has already been parsed by
+                // `section_activate`, which runs over all sections before this
+                // loop. Index pages live in their *parent* section's page list
+                // and carry a `subsection_id` pointing at the section they
+                // index, so skip any page whose `subsection_id` is non-zero.
+                // Matching on the filename instead would be wrong in docs
+                // mode, where the index is `README.md` rather than
+                // `index.smd`.
                 for (s.pages.items) |page_index| {
                     const p = &v.pages.items[page_index];
-                    if (p._scan.file.name == index_smd) continue; // already parsed
+                    if (p._scan.subsection_id != 0) continue; // already parsed
                     worker.addJob(io, .{
                         .page_parse = .{
                             .cfg = cfg,
@@ -1250,6 +1287,83 @@ pub fn run(
         });
     }
 
+    // Docs mode downgrades a class of parse errors to warnings: they are all
+    // opinionated SuperMD rules that imported documentation trips routinely,
+    // and the author cannot fix them without editing the tool's opinions.
+    var warning_count: usize = 0;
+    for (build.variants) |*v| {
+        for (v.pages.items) |*p| {
+            if (!p._parse.active) continue;
+            if (p._parse.status != .parsed) continue;
+            if (p._analysis.warnings.len == 0) continue;
+
+            for (p._analysis.warnings) |err| {
+                warning_count += 1;
+                var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+                const path = std.fmt.bufPrint(&path_buf, "{f}", .{
+                    p._scan.file.fmt(
+                        &v.string_table,
+                        &v.path_table,
+                        v.content_dir_path,
+                        "",
+                    ),
+                }) catch unreachable;
+                const fmt = supermd.Ast.Error.fmt(
+                    err,
+                    p._parse.ziggy_doc.lines,
+                    p._parse.full_src[p._parse.ziggy_doc.end..],
+                    path,
+                );
+                std.debug.print("warning: {f}\n", .{fmt});
+            }
+        }
+    }
+    // Link problems that docs mode tolerated. Each of these has already had
+    // its link rewritten to pass through verbatim, so the page still renders;
+    // printing them keeps the author informed about what does not resolve on
+    // the published site.
+    var link_warning_count: usize = 0;
+    for (build.variants) |*v| {
+        for (v.pages.items) |*p| {
+            if (!p._parse.active) continue;
+            if (p._analysis.link_warnings.items.len == 0) continue;
+
+            for (p._analysis.link_warnings.items) |err| {
+                link_warning_count += 1;
+                std.debug.print(
+                    "{f}: warning: {s}\n",
+                    .{
+                        p._scan.file.fmt(
+                            &v.string_table,
+                            &v.path_table,
+                            v.content_dir_path,
+                            "",
+                        ),
+                        err.title(),
+                    },
+                );
+            }
+        }
+    }
+    if (link_warning_count > 0) {
+        std.debug.print(
+            \\
+            \\{d} link(s) could not be resolved and were left as written.
+            \\
+            \\
+        , .{link_warning_count});
+    }
+
+    if (warning_count > 0) {
+        std.debug.print(
+            \\
+            \\{d} warning(s) in documentation mode. These are recoverable;
+            \\the site was still generated.
+            \\
+            \\
+        , .{warning_count});
+    }
+
     var analysis_errors = false;
     for (build.variants) |*v| {
         for (v.pages.items) |*p| {
@@ -1263,6 +1377,26 @@ pub fn run(
                 }
 
                 const full_src = p._parse.full_src;
+
+                // Pages without frontmatter have no Ziggy AST to point at, so
+                // the precise selector machinery in `location` cannot be used.
+                // In docs mode that is the common case, so report the problems
+                // without a source selection instead of crashing.
+                if (p._parse.ziggy_start == 0) {
+                    for (fm_errors.items) |err| {
+                        std.debug.print("{f}: error: {s}\n", .{
+                            p._scan.file.fmt(
+                                &v.string_table,
+                                &v.path_table,
+                                v.content_dir_path,
+                                "",
+                            ),
+                            @tagName(err),
+                        });
+                    }
+                    continue;
+                }
+
                 const ast = ziggy.Ast.init(arena, full_src, .{
                     .delimiter = .{ .dashes = p._parse.ziggy_start },
                 }) catch fatal.oom();

@@ -25,6 +25,7 @@ const highlight = @import("highlight.zig");
 const main = @import("main.zig");
 const gpa = main.gpa;
 const wuffs = @import("wuffs.zig");
+const docs = @import("docs.zig");
 const Channel = @import("channel.zig").Channel;
 
 const log = std.log.scoped(.worker);
@@ -330,8 +331,10 @@ fn analyzeContent(
 ) error{OutOfMemory}!void {
     const ast = &page._parse.ast;
     const errors = &page._analysis.page;
+    const warnings = &page._analysis.link_warnings;
     const variant = &b.variants[variant_id];
     const autosize = b.cfg.getImageAutosize();
+    const docs_mode = b.cfg.isDocs();
     const index_smd: String = @enumFromInt(1);
     assert(variant.string_table.get("index.smd") == index_smd);
     const index_html: String = @enumFromInt(11);
@@ -551,14 +554,31 @@ fn analyzeContent(
                         // This value is only expected for Link directives.
                         if (@TypeOf(val.*) != supermd.context.Link) continue :outer;
 
+                        // Markdown almost always links with the file
+                        // extension (`[x](OTHER.md)`), but Zine interns page
+                        // URLs without it. Try the ref as written first, then
+                        // again with a trailing `.md` removed.
+                        var link_ref = p.ref;
                         const path: Path = switch (p.kind) {
                             .absolute => blk: {
                                 log.debug("absolute page link '{s}'", .{p.ref});
                                 if (variant.path_table.getPathNoName(
                                     &variant.string_table,
                                     &.{},
-                                    p.ref,
+                                    link_ref,
                                 )) |path| break :blk path;
+                                if (docs_mode) {
+                                    if (docs.scan.stripMdExtension(link_ref)) |stripped| {
+                                        if (variant.path_table.getPathNoName(
+                                            &variant.string_table,
+                                            &.{},
+                                            stripped,
+                                        )) |path| {
+                                            link_ref = stripped;
+                                            break :blk path;
+                                        }
+                                    }
+                                }
                                 log.debug("page link '{s}': path not found", .{p.ref});
                                 if (builtin.mode == .debug) {
                                     var it = std.mem.tokenizeScalar(u8, p.ref, '/');
@@ -580,11 +600,21 @@ fn analyzeContent(
                                 continue :outer;
                             },
                             .sibling => blk: {
-                                // Sibling means that the path is rooted in
-                                // the current's section path. All pages have
-                                // a section except the root index page.
+                                // Sibling means the path is rooted in the
+                                // current page's section path. A section's own
+                                // index is the exception: it lives at the
+                                // section's path but is registered in its
+                                // *parent's* page list, so resolving against
+                                // the parent would look for its siblings in
+                                // the wrong directory. In docs mode, resolve
+                                // such a page against its own path.
+                                //
+                                // The root index is the one page with no
+                                // parent section; its siblings are the other
+                                // pages at the content root, which the empty
+                                // prefix already handles.
                                 const section_id = page._scan.parent_section_id;
-                                if (section_id == 0) {
+                                if (section_id == 0 and !docs_mode) {
                                     try errors.append(page_arena, .{
                                         .node = n,
                                         .kind = .no_parent_section,
@@ -592,14 +622,52 @@ fn analyzeContent(
                                     continue :outer;
                                 }
 
-                                const section = variant.sections.items[section_id];
+                                const own_section: ?u32 = if (docs_mode and
+                                    page._scan.subsection_id != 0)
+                                    page._scan.subsection_id
+                                else
+                                    null;
+
+                                const prefix: []const String = if (section_id == 0)
+                                    &.{}
+                                else if (own_section) |sid|
+                                    variant.sections.items[sid]
+                                        .content_sub_path
+                                        .slice(&variant.path_table)
+                                else
+                                    variant.sections.items[section_id]
+                                        .content_sub_path
+                                        .slice(&variant.path_table);
+
                                 if (variant.path_table.getPathNoName(
                                     &variant.string_table,
-                                    section.content_sub_path.slice(
-                                        &variant.path_table,
-                                    ),
-                                    p.ref,
+                                    prefix,
+                                    link_ref,
                                 )) |path| break :blk path;
+                                if (docs_mode) {
+                                    if (docs.scan.stripMdExtension(link_ref)) |stripped| {
+                                        if (variant.path_table.getPathNoName(
+                                            &variant.string_table,
+                                            prefix,
+                                            stripped,
+                                        )) |path| {
+                                            link_ref = stripped;
+                                            break :blk path;
+                                        }
+                                    }
+                                    // `dir/README.md` addresses the directory's
+                                    // index page, whose url is just `dir`.
+                                    if (docs.scan.stripDirIndex(link_ref)) |dir_path| {
+                                        if (variant.path_table.getPathNoName(
+                                            &variant.string_table,
+                                            prefix,
+                                            dir_path,
+                                        )) |path| {
+                                            link_ref = dir_path;
+                                            break :blk path;
+                                        }
+                                    }
+                                }
 
                                 try errors.append(page_arena, .{
                                     .node = n,
@@ -613,11 +681,18 @@ fn analyzeContent(
                             },
                             .sub => blk: {
                                 // Subpage means that the final path is
-                                // based on the current page's URL path.
-                                // It also is only available on pages that
-                                // are sections, which means that the page
-                                // is guaranteed to be named `index.smd`.
-                                if (page._scan.file.name != index_smd) {
+                                // based on the current page's URL path. It
+                                // is only available on pages that are
+                                // sections. In docs mode a section's index
+                                // may be `README.md` rather than
+                                // `index.smd`.
+                                const is_index_page = if (docs_mode)
+                                    docs.scan.isIndex(page._scan.file.name.slice(
+                                        &variant.string_table,
+                                    ))
+                                else
+                                    page._scan.file.name == index_smd;
+                                if (!is_index_page) {
                                     try errors.append(page_arena, .{
                                         .node = n,
                                         .kind = .not_a_section,
@@ -633,8 +708,20 @@ fn analyzeContent(
                                 if (variant.path_table.getPathNoName(
                                     &variant.string_table,
                                     buf.items,
-                                    p.ref,
+                                    link_ref,
                                 )) |path| break :blk path;
+                                if (docs_mode) {
+                                    if (docs.scan.stripMdExtension(link_ref)) |stripped| {
+                                        if (variant.path_table.getPathNoName(
+                                            &variant.string_table,
+                                            buf.items,
+                                            stripped,
+                                        )) |path| {
+                                            link_ref = stripped;
+                                            break :blk path;
+                                        }
+                                    }
+                                }
 
                                 try errors.append(page_arena, .{
                                     .node = n,
@@ -897,6 +984,28 @@ fn analyzeContent(
                 }
             },
         }
+    }
+
+    // In docs mode, link problems are reported as warnings instead of failing
+    // the build. Documentation imported from GitHub routinely points at files
+    // outside the docs tree (`../AGENTS.md`, `../examples/`) and at code
+    // fences in languages this build cannot highlight. Failing on those would
+    // make the tool unusable on real projects.
+    //
+    // Diverting the accumulated errors here, rather than at each of the two
+    // dozen places that append them, keeps the policy in one place.
+    if (docs_mode and errors.items.len > 0) {
+        for (errors.items) |err| {
+            // A link that never resolved still carries a `.page` source whose
+            // `resolved` field was never assigned. Rendering it as-is would
+            // read uninitialised memory and emit garbage URLs, so rewrite it to
+            // emit exactly what the author wrote.
+            _ = docs.passthroughLink(page_arena, err.node) catch |e| switch (e) {
+                error.OutOfMemory => fatal.oom(),
+            };
+            try warnings.append(page_arena, err);
+        }
+        errors.clearRetainingCapacity();
     }
 }
 
@@ -1200,6 +1309,13 @@ pub fn languageExists(language: ?[]const u8) bool {
     if (std.mem.eql(u8, lang, "=html")) return true;
     if (std.mem.eql(u8, lang, "=mathtex")) return true;
     if (std.mem.eql(u8, lang, "console")) return true;
+    // Diagrams are rendered by mermaid.js in the browser, not by tree-sitter,
+    // so the language is known even though there is no grammar for it.
+    if (std.mem.eql(u8, lang, "mermaid")) return true;
+    // Plain text and shell transcripts are documentation, not code to
+    // highlight. Treating them as unknown made the whole page unbuildable.
+    if (std.mem.eql(u8, lang, "text")) return true;
+    if (std.mem.eql(u8, lang, "txt")) return true;
 
     const syntax = @import("syntax");
     if (syntax.FileType.get_by_name_static(lang) == null) {

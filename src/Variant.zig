@@ -22,6 +22,7 @@ const String = StringTable.String;
 const PathTable = @import("PathTable.zig");
 const Path = PathTable.Path;
 const PathName = PathTable.PathName;
+const docs = @import("docs.zig");
 
 output_path_prefix: []const u8,
 /// Open for the full duration of the program.
@@ -306,6 +307,10 @@ fn scanContentDirInner(
     const index_html = try string_table.intern(gpa, "index.html");
     _ = try string_table.intern(gpa, "index.html");
 
+    // In docs mode the content tree is a normal Markdown tree, so the index
+    // page may be `README.md` as well as `index.smd`.
+    const docs_mode = root.docsModeEnabled;
+
     var pages: std.ArrayListUnmanaged(Page) = .empty;
     var sections: std.ArrayListUnmanaged(Section) = .empty;
     try sections.append(gpa, undefined); // section zero is invalid
@@ -355,6 +360,9 @@ fn scanContentDirInner(
         defer if (dir_entry.path.len > 0) dir.close(io);
 
         var found_index_smd = false;
+        // The exact filename of the index page, which differs between
+        // `index.smd` and `README.md` in docs mode. `undefined` until found.
+        var index_name: ?String = null;
         var it = dir.iterateAssumeFirstIteration();
         while (it.next(io) catch |err| fatal.dir(dir_entry.path, err)) |entry| {
             if (std.mem.startsWith(u8, entry.name, ".")) continue;
@@ -365,9 +373,18 @@ fn scanContentDirInner(
                     if (str == index_html) {
                         @panic("TODO: error reporting for index.html in content section");
                     }
-                    if (std.mem.endsWith(u8, entry.name, ".smd")) {
-                        if (str == index_smd) {
+                    const is_page = if (docs_mode)
+                        docs.scan.isPage(entry.name)
+                    else
+                        std.mem.endsWith(u8, entry.name, ".smd");
+                    if (is_page) {
+                        const is_index = if (docs_mode)
+                            docs.scan.isIndex(entry.name)
+                        else
+                            str == index_smd;
+                        if (is_index) {
                             found_index_smd = true;
+                            index_name = str;
                             continue;
                         }
                         try page_names.append(arena, str);
@@ -381,6 +398,7 @@ fn scanContentDirInner(
                 },
             }
         }
+        const index_page_name = index_name orelse index_smd;
 
         try urls.ensureUnusedCapacity(gpa, @intCast(@intFromBool(found_index_smd) +
             page_names.items.len + asset_names.items.len));
@@ -425,7 +443,7 @@ fn scanContentDirInner(
             index_page._scan = .{
                 .file = .{
                     .path = content_sub_path,
-                    .name = index_smd,
+                    .name = index_page_name,
                 },
                 .url = content_sub_path,
                 .page_id = page_id,
@@ -535,7 +553,14 @@ fn scanContentDirInner(
         }
 
         if (dir_entry.path.len == 0 and !found_index_smd) {
-            @panic("TODO: site must have a root index page");
+            // The content root must provide a home page. In docs mode the
+            // natural name is README.md, which is what GitHub and VitePress
+            // both expect.
+            const hint = if (docs_mode)
+                "the content directory must contain a README.md or index.md"
+            else
+                "the content directory must contain an index.smd";
+            fatal.msg("\nerror: {s}\n", .{hint});
         }
 
         // assets

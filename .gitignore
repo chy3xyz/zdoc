@@ -6,3 +6,5 @@ zig-out
 zig-pkg
 scratch
 result
+.DS_Store
+.zdoc-theme
