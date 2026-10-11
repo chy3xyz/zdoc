@@ -4,20 +4,18 @@
 <nav id="sidebar">
 	<div class="sidebar__group">Contents</div>
 	<ul class="sidebar__list">
-		<!-- On a section index, list that section's pages; otherwise list the
-		     section this page belongs to, so the reader keeps their bearings
-		     either way. `subpagesAlphabetic` sorts by title, which is what a
-		     reader expects from documentation. -->
-		<ctx :if="$page.isSection()">
-			<li :loop="$page.subpagesAlphabetic()">
-				<a class="sidebar__link" href="$loop.it.link()" :text="$loop.it.title"></a>
-			</li>
-		</ctx>
-		<ctx :if="$page.isSection().not()">
-			<li :loop="$page.parentSection().subpagesAlphabetic()">
-				<a class="sidebar__link" href="$loop.it.link()" :text="$loop.it.title"></a>
-			</li>
-		</ctx>
+		<!-- The whole content tree, derived from the directory structure.
+		     Entries are a flat list carrying their nesting depth, because
+		     SuperHTML has no recursion; the `class` encodes the indentation.
+		     A directory without a README renders as a plain label. -->
+		<li :loop="$site.sidebar()">
+			<ctx :if="$loop.it.is_link">
+				<a class="$loop.it.class" href="$loop.it.link()" :text="$loop.it.title"></a>
+			</ctx>
+			<ctx :if="$loop.it.is_link.not()">
+				<span class="$loop.it.class" :text="$loop.it.title"></span>
+			</ctx>
+		</li>
 	</ul>
 </nav>
 <aside id="toc">

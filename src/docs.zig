@@ -18,6 +18,7 @@ const std = @import("std");
 const Io = std.Io;
 const supermd = @import("supermd");
 const slug = @import("docs/slug.zig");
+pub const Sidebar = @import("docs/Sidebar.zig");
 
 /// The layout used by pages that do not declare one.
 pub const default_layout = "doc.shtml";

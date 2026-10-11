@@ -42,6 +42,9 @@ pages: std.ArrayListUnmanaged(Page),
 urls: std.AutoHashMapUnmanaged(PathName, LocationHint),
 /// Overflowing LocationHints end up in here, populated alongside 'urls'.
 collisions: std.ArrayListUnmanaged(Collision),
+/// The documentation sidebar, built from the content tree after parsing.
+/// Empty in blog mode.
+sidebar: []const @import("docs/Sidebar.zig").Item = &.{},
 
 i18n: context.Map.DynamicDict,
 i18n_src: [:0]const u8,

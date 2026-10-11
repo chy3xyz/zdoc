@@ -382,6 +382,39 @@ pub const Builtins = struct {
             return context.Array.init(gpa, Value, page_list);
         }
     };
+    pub const sidebar = struct {
+        pub const signature: Signature = .{
+            .ret = .{ .Many = .Value },
+        };
+        pub const docs_description =
+            \\The documentation sidebar, derived from the content directory
+            \\structure.
+            \\
+            \\Each entry has a `title`, a nesting `depth`, a `class` carrying
+            \\the indentation, an `is_dir` flag, and `url()`/`link()` which
+            \\return null when the directory has no index page.
+            \\
+            \\Only populated in documentation mode; always empty otherwise.
+        ;
+        pub const examples =
+            \\<li :loop="$site.sidebar()">
+            \\  <a class="$loop.it.class" href="$loop.it.link()" :text="$loop.it.title"></a>
+            \\</li>
+        ;
+        pub fn call(
+            site: *const Site,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+
+            const items = ctx._meta.build.variants[site._meta.variant_id].sidebar;
+            const list = try gpa.alloc(Value, items.len);
+            for (items, 0..) |item, i| list[i] = .{ .sidebar_item = item };
+            return context.Array.init(gpa, Value, list);
+        }
+    };
     pub const locale = struct {
         pub const signature: Signature = .{
             .params = &.{.String},

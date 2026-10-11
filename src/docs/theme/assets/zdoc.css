@@ -135,13 +135,59 @@ a:hover {
   font-size: 14px;
 }
 
-.sidebar__link:hover {
+/* The sidebar is a flat list; the nesting depth is carried by the class the
+   builder assigns, and turned into indentation here. */
+a.sidebar__item {
+  display: block;
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* A directory that has no index page: a label, not a link. */
+span.sidebar__item {
+  display: block;
+  padding: 5px 10px;
+  border-radius: 6px;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 8px;
+}
+
+.sidebar__item--d0 {
+  padding-left: 10px;
+}
+
+.sidebar__item--d1 {
+  padding-left: 24px;
+}
+
+.sidebar__item--d2 {
+  padding-left: 38px;
+}
+
+.sidebar__item--d3 {
+  padding-left: 52px;
+}
+
+.sidebar__link:hover,
+a.sidebar__item:hover,
+span.sidebar__item:hover {
   background: var(--bg-soft);
   color: var(--text);
   text-decoration: none;
 }
 
-.sidebar__link.is-active {
+a.sidebar__item:hover {
+  text-decoration: none;
+}
+
+.sidebar__link.is-active,
+.sidebar__item.is-active {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 500;

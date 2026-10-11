@@ -1835,6 +1835,15 @@ pub fn run(
         return build;
     }
 
+    // The sidebar is derived from the content tree, which is only fully known
+    // once every page has been parsed (titles come from the H1) and analyzed
+    // (inactive pages are excluded). Compute it here, just before rendering.
+    if (build.cfg.isDocs()) {
+        for (build.variants) |*v| {
+            v.sidebar = docs.Sidebar.build(arena, v) catch fatal.oom();
+        }
+    }
+
     var pages_to_render: usize = 0;
     var progress_page_render = progress.start("Render pages", 0);
     {

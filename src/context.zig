@@ -41,11 +41,13 @@ pub const Union = @import("context/Union.zig");
 pub const Optional = @import("context/Optional.zig");
 pub const Iterator = @import("context/Iterator.zig");
 pub const Array = @import("context/Array.zig");
+pub const SidebarItem = @import("docs/Sidebar.zig").Item;
 
 pub const Value = union(enum) {
     root: *Root,
     site: *const Site,
     page: *const Page,
+    sidebar_item: SidebarItem,
     ctx: Ctx(Value),
     alternative: Page.Alternative,
     content_section: Page.ContentSection,
@@ -138,6 +140,7 @@ pub const Value = union(enum) {
             Page.Alternative => .{ .alternative = v },
             Page.ContentSection => .{ .content_section = v },
             Page.Footnote => .{ .footnote = v },
+            SidebarItem => .{ .sidebar_item = v },
             *Build => .{ .build = v },
             Git => .{ .git = v },
             Ctx(Value) => .{ .ctx = v },
@@ -146,7 +149,7 @@ pub const Value = union(enum) {
             []const u8, []u8 => .{ .string = .{ .value = v } },
             bool => .{ .bool = .{ .value = v } },
             ?bool => if (v) |b| try context.Optional.init(gpa, b) else context.Optional.Null,
-            i64, usize => .{ .int = .{ .value = @intCast(v) } },
+            i64, usize, u16, u32 => .{ .int = .{ .value = @intCast(v) } },
             ziggy.Dynamic => try fromZiggy(gpa, v),
             Map.DynamicDict => .{ .map = .{ .value = v } },
             Map.KV => .{ .map_kv = v },
@@ -164,6 +167,10 @@ pub const Value = union(enum) {
                 try context.Optional.init(gpa, opt)
             else
                 context.Optional.Null,
+            ?*const Page => if (v) |pg|
+                try context.Optional.init(gpa, pg)
+            else
+                context.Optional.Null,
             ?*context.Iterator => if (v) |opt| .{
                 .iterator = opt,
             } else .{ .err = "$loop is not set" },
@@ -179,6 +186,7 @@ pub const Value = union(enum) {
             []const Page.Alternative => try Array.init(gpa, Page.Alternative, v),
             []Page.ContentSection => try Array.init(gpa, Page.ContentSection, v),
             []Page.Footnote => try Array.init(gpa, Page.Footnote, v),
+            []SidebarItem => try Array.init(gpa, SidebarItem, v),
             else => @compileError("TODO: implement Value.from for " ++ @typeName(@TypeOf(v))),
         };
     }
