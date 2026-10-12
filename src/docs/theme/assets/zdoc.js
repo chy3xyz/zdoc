@@ -69,6 +69,61 @@
 
   onScroll();
 })();
+// ----------------------------------------------------------------- nav drawer
+//
+// Only meaningful below 800px, where the sidebar is a panel over the content
+// rather than a column beside it. Above that the toggle is `display: none`
+// and none of this runs, so there is no state to get out of sync.
+(function navDrawer() {
+  "use strict";
+
+  var toggle = document.getElementById("nav-toggle");
+  var scrim = document.getElementById("nav-scrim");
+  var sidebar = document.getElementById("sidebar");
+  if (!toggle || !scrim || !sidebar) return;
+
+  function setOpen(open) {
+    document.body.classList.toggle("nav-open", open);
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toggle.setAttribute("aria-label", open ? "Close navigation" : "Open navigation");
+    scrim.hidden = !open;
+    // Move focus into the panel when it opens, so a keyboard reader is not
+    // left behind on a control the drawer has just covered.
+    if (open) {
+      var first = sidebar.querySelector("a");
+      if (first) first.focus();
+    }
+  }
+
+  toggle.addEventListener("click", function () {
+    setOpen(!document.body.classList.contains("nav-open"));
+  });
+
+  scrim.addEventListener("click", function () {
+    setOpen(false);
+  });
+
+  // Following a link inside the drawer should close it, or the reader lands
+  // on the next page with the panel still covering it.
+  sidebar.addEventListener("click", function (ev) {
+    if (ev.target.closest("a")) setOpen(false);
+  });
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && document.body.classList.contains("nav-open")) {
+      setOpen(false);
+      toggle.focus();
+    }
+  });
+
+  // Resizing past the breakpoint leaves `nav-open` set on the body with no
+  // toggle visible to clear it, which would hide nothing but confuse the next
+  // resize back down.
+  window.addEventListener("resize", function () {
+    if (window.innerWidth > 800) setOpen(false);
+  });
+})();
+
 // ------------------------------------------------------------------- search
 //
 // The index is fetched on the first keystroke rather than on load: a reader
@@ -77,13 +132,17 @@
 (function search() {
   "use strict";
 
+  var box = document.getElementById("search");
   var input = document.getElementById("search-input");
   var results = document.getElementById("search-results");
+  var status = document.getElementById("search-status");
   var meta = document.querySelector('meta[name="zdoc-search-index"]');
-  if (!input || !results || !meta) return;
+  if (!box || !input || !results || !meta) return;
 
   var index = null;
   var loading = null;
+  var rows = [];
+  var active = -1;
 
   function load() {
     if (index) return Promise.resolve(index);
@@ -98,11 +157,12 @@
         return data;
       })
       .catch(function (err) {
-        // A failed index must not break the page. Search simply stops
-        // offering results, which is far better than an unhandled rejection
-        // on every keystroke.
+        // A failed index must not break the page. Search stops offering
+        // results, which is far better than an unhandled rejection on every
+        // keystroke.
         console.warn(err);
         input.disabled = true;
+        input.placeholder = "Search unavailable";
         return null;
       });
     return loading;
@@ -110,8 +170,7 @@
 
   // Byte bigrams, lowercased, packed into one number. This has to agree
   // exactly with `src/docs/Search.zig`: the index is written in Zig and read
-  // here, and a disagreement shows up as a search that silently finds
-  // nothing.
+  // here, and a disagreement shows up as a search that silently finds nothing.
   function bigrams(text) {
     var bytes = new TextEncoder().encode(text.toLowerCase());
     var out = [];
@@ -152,32 +211,20 @@
       return a.length - b.length;
     });
 
-    var counts = new Map();
+    var hits = [];
     var shortest = lists[0];
     for (var s = 0; s < shortest.length; s++) {
       var id = shortest[s];
       var inAll = true;
       for (var l = 1; l < lists.length; l++) {
-        var other = lists[l];
-        var found = false;
-        for (var m = 0; m < other.length; m++) {
-          if (other[m] === id) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
+        if (lists[l].indexOf(id) === -1) {
           inAll = false;
           break;
         }
       }
-      if (inAll) counts.set(id, lists.length);
+      if (inAll) hits.push(id);
     }
 
-    var hits = [];
-    counts.forEach(function (_score, id) {
-      hits.push(id);
-    });
     // A record whose heading is close to the query is more likely to be what
     // the reader meant than one that only mentions it in passing.
     hits.sort(function (a, b) {
@@ -190,32 +237,83 @@
 
   var MAX_RESULTS = 20;
 
+  // Renders `text` with the first occurrence of `query` marked.
+  //
+  // Built from text nodes and a single <mark>, never from an HTML string: the
+  // text is the author's prose, and a document can contain anything.
+  function highlight(target, text, query) {
+    target.textContent = "";
+    if (!query) {
+      target.textContent = text;
+      return;
+    }
+    var at = text.toLowerCase().indexOf(query.toLowerCase());
+    if (at === -1 || query.length < 2) {
+      target.textContent = text;
+      return;
+    }
+    target.appendChild(document.createTextNode(text.slice(0, at)));
+    var mark = document.createElement("mark");
+    mark.textContent = text.slice(at, at + query.length);
+    target.appendChild(mark);
+    target.appendChild(document.createTextNode(text.slice(at + query.length)));
+  }
+
+  function setActive(next) {
+    if (active === next) return;
+    if (rows[active]) rows[active].removeAttribute("aria-selected");
+    active = next;
+    if (rows[active]) {
+      rows[active].setAttribute("aria-selected", "true");
+      // The dropdown is short and the list can be long; without this, arrowing
+      // past the fold moves the selection somewhere the reader cannot see.
+      rows[active].scrollIntoView({ block: "nearest" });
+      input.setAttribute("aria-activedescendant", rows[active].id);
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function close() {
+    results.hidden = true;
+    results.innerHTML = "";
+    rows = [];
+    setActive(-1);
+    input.setAttribute("aria-expanded", "false");
+    status.textContent = "";
+  }
+
   function show(query) {
     results.innerHTML = "";
+    rows = [];
+    setActive(-1);
+
     if (!query) {
-      results.hidden = true;
+      close();
       return;
     }
 
-    var rows = rank(query).slice(0, MAX_RESULTS);
-    if (rows.length === 0) {
+    var found = rank(query);
+    if (found.length === 0) {
       var none = document.createElement("li");
       none.className = "search__empty";
       none.textContent = "No results";
       results.appendChild(none);
     }
 
-    rows.forEach(function (row) {
+    found.forEach(function (row, i) {
       var li = document.createElement("li");
+      li.className = "search__result";
+      li.id = "search-result-" + i;
+      li.setAttribute("role", "option");
+
       var a = document.createElement("a");
-      // `textContent`, never `innerHTML`: the indexed text is the author's
-      // prose, and rendering it as markup would be an injection point.
       a.href = row.u + (row.a ? "#" + row.a : "");
-      a.className = "search__result";
+      a.tabIndex = -1;
 
       var title = document.createElement("span");
       title.className = "search__result-title";
-      title.textContent = row.h || row.t;
+      highlight(title, row.h || row.t, query);
       a.appendChild(title);
 
       if (row.h) {
@@ -227,16 +325,20 @@
 
       li.appendChild(a);
       results.appendChild(li);
+      rows.push(li);
     });
 
     results.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    status.textContent =
+      found.length === 1 ? "1 result" : found.length + " results";
   }
 
   var pending = null;
   input.addEventListener("input", function () {
     var query = input.value.trim();
     if (query.length < 2) {
-      show("");
+      close();
       return;
     }
     clearTimeout(pending);
@@ -247,24 +349,51 @@
     }, 120);
   });
 
-  // Escape closes the results, which is what every other search box does.
   input.addEventListener("keydown", function (ev) {
     if (ev.key === "Escape") {
+      ev.preventDefault();
       input.value = "";
-      show("");
+      close();
       input.blur();
-    } else if (ev.key === "Enter") {
-      var first = results.querySelector("a");
-      if (first) {
-        ev.preventDefault();
-        window.location.href = first.href;
-      }
+      return;
+    }
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      if (rows.length === 0) return;
+      ev.preventDefault();
+      var step = ev.key === "ArrowDown" ? 1 : -1;
+      // Wrap, so holding the arrow key cycles rather than sticking at an end.
+      var next = (active + step + rows.length) % rows.length;
+      setActive(next);
+      return;
+    }
+    if (ev.key === "Enter") {
+      if (rows.length === 0) return;
+      ev.preventDefault();
+      var chosen = rows[active === -1 ? 0 : active];
+      window.location.href = chosen.querySelector("a").href;
     }
   });
 
+  // "/" focuses search from anywhere, the way most documentation sites do.
+  // A modifier means the reader is typing a shortcut of their own.
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "/" || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    var tag = document.activeElement && document.activeElement.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    ev.preventDefault();
+    input.focus();
+    input.select();
+  });
+
+  // The hint is decoration; it should not appear once the reader knows it.
+  input.addEventListener("focus", function () {
+    box.classList.add("is-focused");
+  });
+  input.addEventListener("blur", function () {
+    box.classList.remove("is-focused");
+  });
+
   document.addEventListener("click", function (ev) {
-    if (!results.contains(ev.target) && ev.target !== input) {
-      results.hidden = true;
-    }
+    if (!box.contains(ev.target)) close();
   });
 })();

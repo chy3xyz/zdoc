@@ -36,32 +36,50 @@ pub const Item = struct {
     /// `README.md`/`index.md` has no page and renders as a plain label.
     is_link: bool,
     is_dir: bool,
-    /// CSS class carrying the indentation. Precomputed so the theme can
-    /// apply it with a plain `class="$loop.it.class"` attribute instead of
-    /// needing string interpolation.
+    /// CSS class carrying the entry's kind and its indentation.
+    ///
+    /// Precomputed in full because the template language cannot concatenate:
+    /// `class="sidebar__section--$loop.it.depth"` does not parse, so the whole
+    /// value has to be chosen here.
     class: []const u8,
 
+    /// A section heading, a section with no page to link to, and a page are
+    /// three different things visually, and a flat list carrying only an
+    /// indent cannot tell a reader which is which.
     const Class = struct {
-        const d0 = "sidebar__item sidebar__item--d0";
-        const d1 = "sidebar__item sidebar__item--d1";
-        const d2 = "sidebar__item sidebar__item--d2";
-        const d3 = "sidebar__item sidebar__item--d3";
+        const section = [_][]const u8{
+            "sidebar__section sidebar__section--d0",
+            "sidebar__section sidebar__section--d1",
+            "sidebar__section sidebar__section--d2",
+            "sidebar__section sidebar__section--d3",
+        };
+        const label = [_][]const u8{
+            "sidebar__label sidebar__label--d0",
+            "sidebar__label sidebar__label--d1",
+            "sidebar__label sidebar__label--d2",
+            "sidebar__label sidebar__label--d3",
+        };
+        const item = [_][]const u8{
+            "sidebar__item sidebar__item--d0",
+            "sidebar__item sidebar__item--d1",
+            "sidebar__item sidebar__item--d2",
+            "sidebar__item sidebar__item--d3",
+        };
     };
 
     fn init(title: []const u8, page: ?*const Page, depth: u16, is_dir: bool) Item {
+        // Deeper levels clamp so the theme needs no unbounded class list.
+        const slot = @min(depth, 3);
         return .{
             .title = title,
             .page = page,
             .depth = depth,
             .is_link = page != null,
             .is_dir = is_dir,
-            // Deeper levels clamp so the theme needs no unbounded class list.
-            .class = switch (depth) {
-                0 => Class.d0,
-                1 => Class.d1,
-                2 => Class.d2,
-                else => Class.d3,
-            },
+            .class = if (is_dir)
+                (if (page != null) Class.section[slot] else Class.label[slot])
+            else
+                Class.item[slot],
         };
     }
 

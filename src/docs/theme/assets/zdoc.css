@@ -109,27 +109,48 @@ a:hover {
   width: var(--sidebar-width);
   flex: 0 0 var(--sidebar-width);
   border-right: 1px solid var(--border);
-  padding: 24px 16px 48px;
+  padding: 20px 12px 48px;
   position: sticky;
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The nav is a long list in a short column; letting the page scroll it
+     while it is sticky would drag the reader's scroll position around when
+     they reach the end of a section. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
 }
 
 .sidebar__title {
-  font-size: 17px;
-  font-weight: 600;
-  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0 8px 2px;
   display: block;
   color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar__title:hover {
+  color: var(--accent);
 }
 
 .sidebar__group {
-  margin: 20px 0 6px;
-  font-size: 12px;
-  font-weight: 600;
+  margin: 22px 8px 8px;
+  font-size: 11px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--text-dim);
 }
 
@@ -139,70 +160,97 @@ a:hover {
   padding: 0;
 }
 
-.sidebar__link {
+/* One shape for every entry, so that hover, focus and the active marker are
+   written once and the indent only moves the padding. The entries used to be
+   styled by element type, which made the section and the page under it look
+   like the same kind of thing. */
+.sidebar__item,
+.sidebar__section,
+.sidebar__label {
   display: block;
-  padding: 5px 10px;
+  margin: 1px 0;
+  padding: 6px 10px;
   border-radius: 6px;
-  color: var(--text-dim);
   font-size: 14px;
+  line-height: 1.45;
+  /* The active marker is a bar on the left edge, so the text has to start
+     clear of it rather than sitting on top. */
+  border-left: 2px solid transparent;
+  text-decoration: none;
+  color: var(--text-dim);
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
-/* The sidebar is a flat list; the nesting depth is carried by the class the
-   builder assigns, and turned into indentation here. */
-a.sidebar__item {
-  display: block;
-  padding: 5px 10px;
-  border-radius: 6px;
-  color: var(--text-dim);
-  font-size: 14px;
+/* A section with a page to open. Weighted above its children so the shape of
+   the tree is readable without relying on indentation alone. */
+.sidebar__section {
+  color: var(--text);
+  font-weight: 600;
+  margin-top: 10px;
 }
 
-/* A directory that has no index page: a label, not a link. */
-span.sidebar__item {
-  display: block;
-  padding: 5px 10px;
-  border-radius: 6px;
+.sidebar__section:first-child {
+  margin-top: 2px;
+}
+
+/* A directory with no index page: a heading with nothing to click. */
+.sidebar__label {
   color: var(--text);
   font-weight: 600;
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-top: 8px;
+  letter-spacing: 0.05em;
+  margin-top: 12px;
 }
 
-.sidebar__item--d0 {
+.sidebar__item--d0,
+.sidebar__section--d0,
+.sidebar__label--d0 {
   padding-left: 10px;
 }
 
-.sidebar__item--d1 {
-  padding-left: 24px;
+.sidebar__item--d1,
+.sidebar__section--d1,
+.sidebar__label--d1 {
+  padding-left: 22px;
 }
 
-.sidebar__item--d2 {
-  padding-left: 38px;
+.sidebar__item--d2,
+.sidebar__section--d2,
+.sidebar__label--d2 {
+  padding-left: 34px;
 }
 
-.sidebar__item--d3 {
-  padding-left: 52px;
+.sidebar__item--d3,
+.sidebar__section--d3,
+.sidebar__label--d3 {
+  padding-left: 46px;
 }
 
-.sidebar__link:hover,
-a.sidebar__item:hover,
-span.sidebar__item:hover {
+.sidebar__item:hover,
+.sidebar__section:hover,
+.sidebar__label:hover {
   background: var(--bg-soft);
   color: var(--text);
   text-decoration: none;
 }
 
-a.sidebar__item:hover {
-  text-decoration: none;
+/* Keyboard focus needs to be visible: the active-page fill is not a focus
+   state, and a mouse user never sees this ring. */
+.sidebar__item:focus-visible,
+.sidebar__section:focus-visible,
+.sidebar__label:focus-visible,
+.sidebar__title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
-.sidebar__link.is-active,
-.sidebar__item.is-active {
+.sidebar__item.is-active,
+.sidebar__section.is-active {
   background: var(--accent-soft);
+  border-left-color: var(--accent);
   color: var(--accent);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .content {
@@ -513,26 +561,105 @@ pre.mermaid svg {
   }
 }
 
+/* The narrow-screen navigation drawer.
+ *
+ * Below this width there is no room for a permanent column, so the sidebar
+ * becomes a panel that slides in over the content. It used to become a static
+ * block above the content instead, which pushed the article off the screen
+ * and gave the reader no way to dismiss it. */
+.nav-toggle {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 50;
+  width: 38px;
+  height: 38px;
+  padding: 9px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.nav-toggle__bar {
+  display: block;
+  height: 2px;
+  margin: 3px 0;
+  border-radius: 1px;
+  background: var(--text);
+}
+
+.nav-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.nav-scrim {
+  display: none;
+}
+
 @media (max-width: 800px) {
   .layout {
     display: block;
   }
 
+  .nav-toggle {
+    display: block;
+  }
+
   .sidebar {
-    width: auto;
-    flex: none;
-    height: auto;
-    position: static;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 60;
+    width: min(300px, 84vw);
+    height: 100vh;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    /* Off-canvas until the reader opens it. Kept in the flow rather than
+       removed so the transition has something to animate. */
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    padding-top: 16px;
+  }
+
+  body.nav-open .sidebar {
+    transform: translateX(0);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.2);
+  }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  .nav-scrim[hidden] {
+    display: none;
+  }
+
+  /* The title sits under the toggle, so it needs room to clear it. */
+  .sidebar__title {
+    margin-left: 46px;
   }
 
   .content {
-    padding: 24px 20px 64px;
+    padding: 62px 20px 64px;
   }
 
   .doc .header-anchor {
     display: none;
+  }
+}
+
+/* A reader who has asked for less motion should not be animated at all. */
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .search__results a {
+    transition: none;
   }
 }
 /* ---------------------------------------------------------------- home page
@@ -672,39 +799,74 @@ pre.mermaid svg {
 
 .search {
   position: relative;
-  margin: 12px 16px 16px;
+  margin: 4px 4px 20px;
 }
 
 .search__input {
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px 34px 7px 11px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
+  border-radius: 7px;
+  background: var(--bg-soft);
   color: var(--text);
   font: inherit;
-  font-size: 14px;
+  font-size: 13.5px;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+
+.search__input::placeholder {
+  color: var(--text-dim);
+}
+
+.search__input:hover {
+  border-color: var(--text-dim);
 }
 
 .search__input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The "/" hint, shown only while the field is idle. Once the reader has
+   focused it the shortcut is no longer news, and it would sit on top of
+   whatever they type. */
+.search__hint {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.search.is-focused .search__hint,
+.search__input:not(:placeholder-shown) ~ .search__hint {
+  display: none;
 }
 
 .search__results {
   position: absolute;
-  z-index: 20;
+  z-index: 30;
   left: 0;
   right: 0;
-  max-height: 60vh;
+  max-height: min(60vh, 420px);
   overflow-y: auto;
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   padding: 4px;
   list-style: none;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--bg);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
 }
 
 .search__results[hidden] {
@@ -712,38 +874,76 @@ pre.mermaid svg {
 }
 
 .search__result {
+  border-radius: 6px;
+}
+
+.search__result a {
   display: block;
   padding: 7px 10px;
-  border-radius: 4px;
+  border-radius: 6px;
   text-decoration: none;
   color: var(--text);
 }
 
-.search__result:hover,
-.search__result:focus {
+/* Hover for a pointer, and the selection the arrow keys move. They are
+   different states and a keyboard user never produces the first one. */
+.search__result a:hover {
+  background: var(--bg-soft);
+}
+
+.search__result[aria-selected="true"] {
   background: var(--accent-soft);
+}
+
+.search__result[aria-selected="true"] a {
+  color: var(--accent);
 }
 
 .search__result-title {
   display: block;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13.5px;
+  line-height: 1.4;
 }
 
 .search__result-page {
   display: block;
   color: var(--text-dim);
   font-size: 12px;
-  /* A long page title should not push the result list sideways. */
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The matched run. A background rather than a colour change, because the
+   match is often a single CJK character and a tint is easier to spot than a
+   slightly bolder glyph. */
+.search__result-title mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 .search__empty {
-  padding: 7px 10px;
+  padding: 9px 10px;
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: 13.5px;
+}
+
+/* Screen-reader-only result count, so the list does not change width when it
+   appears and disappear. */
+.search__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* -------------------------------------------------------------- containers

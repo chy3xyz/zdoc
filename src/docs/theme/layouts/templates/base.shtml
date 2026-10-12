@@ -35,14 +35,30 @@
 		<super>
 	</head>
 	<body id="body">
+		<!-- Only reachable on a narrow screen; see the media query. The label
+		     names the control for a screen reader, which never sees the icon. -->
+		<button id="nav-toggle" class="nav-toggle" type="button"
+			aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+			<span class="nav-toggle__bar"></span>
+			<span class="nav-toggle__bar"></span>
+			<span class="nav-toggle__bar"></span>
+		</button>
+		<div class="nav-scrim" id="nav-scrim" hidden></div>
 		<div class="layout">
 			<nav class="sidebar" id="sidebar">
 				<a class="sidebar__title" href="$site.index().link()" :text="$site.title"></a>
-				<div class="search">
+				<div class="search" id="search">
+					<!-- The combobox roles are what let a screen reader follow
+					     the result list as the reader arrows through it; the
+					     list is empty until they type, so it starts collapsed. -->
 					<input id="search-input" class="search__input" type="search"
-						placeholder="Search" autocomplete="off"
-						aria-label="Search the documentation">
-					<ul id="search-results" class="search__results" hidden></ul>
+						placeholder="Search" autocomplete="off" spellcheck="false"
+						role="combobox" aria-expanded="false" aria-controls="search-results"
+						aria-autocomplete="list" aria-label="Search the documentation">
+					<kbd class="search__hint" aria-hidden="true">/</kbd>
+					<ul id="search-results" class="search__results" role="listbox"
+						aria-label="Search results" hidden></ul>
+					<p id="search-status" class="search__status" role="status" aria-live="polite"></p>
 				</div>
 				<super>
 			</nav>
