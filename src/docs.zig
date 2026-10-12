@@ -21,6 +21,11 @@ const slug = @import("docs/slug.zig");
 pub const Sidebar = @import("docs/Sidebar.zig");
 /// The YAML-subset frontmatter reader used in docs mode.
 pub const frontmatter = @import("docs/frontmatter.zig");
+const Variant = @import("Variant.zig");
+const StringTable = @import("StringTable.zig");
+const PathTable = @import("PathTable.zig");
+const String = StringTable.String;
+const Path = PathTable.Path;
 
 /// The layout used by pages that do not declare one.
 pub const default_layout = "doc.shtml";
@@ -386,12 +391,112 @@ pub const scan = struct {
     /// Maps `dir/README.md` (or `dir/index.md`) onto `dir`, which is the url of
     /// a directory's index page. Returns null when the ref does not name a
     /// directory index.
+    ///
+    /// A bare `README.md` with no directory in front of it maps onto `/`; that
+    /// form is what a link climbing back to the site root looks like.
     pub fn stripDirIndex(ref: []const u8) ?[]const u8 {
         if (std.mem.endsWith(u8, ref, "/")) return null;
-        const sep = std.mem.lastIndexOfScalar(u8, ref, '/') orelse return null;
+        const sep = std.mem.lastIndexOfScalar(u8, ref, '/') orelse
+            return if (isIndex(ref)) "/" else null;
         if (!isIndex(ref[sep + 1 ..])) return null;
         const dir = ref[0..sep];
         return if (dir.len == 0) "/" else dir;
+    }
+
+    /// A link target resolved against the page that wrote it.
+    ///
+    /// SuperMD classifies any link starting with `.` as relative to the
+    /// current page but does not strip `..` components, so
+    /// `[x](../../ref/X.md)` reaches us whole. Climbing out of a directory is
+    /// ordinary Markdown and by far the most common way a docs tree links
+    /// between sections, so it has to resolve.
+    pub const Resolved = struct {
+        /// The directory the target is relative to, one component shorter for
+        /// each `..` the target climbed.
+        prefix_len: usize,
+        /// The target with its `..` and `./` components removed.
+        rest: []const u8,
+    };
+
+    /// Splits `ref` into a climb count and the path underneath it.
+    ///
+    /// Returns null when the ref climbs above the content root, which no page
+    /// can satisfy: a link out of the docs tree is not a page, and treating
+    /// it as one would resolve it to something the author never wrote.
+    pub fn resolveRelative(prefix_len: usize, ref: []const u8) ?Resolved {
+        var remaining = prefix_len;
+        var rest = ref;
+
+        // SuperMD strips the first two characters of a dotted link and nothing
+        // else. For `./x.md` that is the `./`, which is harmless, but it eats
+        // one `../` out of every additional level: `../../x.md` arrives as
+        // `/../x.md`. Each leading slash is therefore a climb the author
+        // wrote and SuperMD dropped on the way here, and counting them is what
+        // makes the link land on the page it names.
+        while (rest.len > 0 and rest[0] == '/') {
+            if (remaining == 0) return null;
+            remaining -= 1;
+            rest = rest[1..];
+        }
+
+        while (true) {
+            if (std.mem.startsWith(u8, rest, "../")) {
+                if (remaining == 0) return null;
+                remaining -= 1;
+                rest = rest["../".len..];
+                continue;
+            }
+            if (std.mem.startsWith(u8, rest, "./")) {
+                rest = rest["./".len..];
+                continue;
+            }
+            break;
+        }
+
+        // A bare `..` or `../` addresses the parent directory itself, which
+        // in this url space is a directory's index page.
+        if (rest.len == 0 or std.mem.eql(u8, rest, "..")) return .{
+            .prefix_len = remaining,
+            .rest = "",
+        };
+
+        return .{ .prefix_len = remaining, .rest = rest };
+    }
+
+    /// Resolves a relative link target to an absolute content path, trying
+    /// each of the forms documentation writes them in.
+    ///
+    /// Returns null when no form names an existing page, leaving the caller's
+    /// fallback -- emit the link as written -- in charge.
+    pub fn resolvePageRef(
+        v: *const Variant,
+        prefix: []const String,
+        ref: []const u8,
+    ) ?Path {
+        const rel = resolveRelative(prefix.len, ref) orelse return null;
+        const trimmed = prefix[0..rel.prefix_len];
+
+        // Candidates, in the order documentation writes them: with the `.md`
+        // extension, without it, and as a directory index.
+        var candidates: [3][]const u8 = undefined;
+        var count: usize = 0;
+        if (stripMdExtension(rel.rest)) |stripped| {
+            candidates[count] = stripped;
+            count += 1;
+        }
+        if (stripDirIndex(rel.rest)) |dir_path| {
+            candidates[count] = dir_path;
+            count += 1;
+        }
+        candidates[count] = rel.rest;
+        count += 1;
+
+        for (candidates[0..count]) |cand| {
+            if (v.path_table.getPathNoName(&v.string_table, trimmed, cand)) |path| {
+                return path;
+            }
+        }
+        return null;
     }
 };
 
@@ -444,6 +549,32 @@ test "scan.stripDirIndex" {
     try std.testing.expectEqualStrings("dev", scan.stripDirIndex("dev/README.md").?);
     try std.testing.expectEqualStrings("a/b", scan.stripDirIndex("a/b/index.md").?);
     try std.testing.expect(scan.stripDirIndex("dev/notes.md") == null);
-    try std.testing.expect(scan.stripDirIndex("README.md") == null);
     try std.testing.expect(scan.stripDirIndex("dev/") == null);
+    // A bare index name carries no directory, and the only directory it can
+    // mean is the content root -- which is what a link climbing all the way
+    // back up resolves to.
+    try std.testing.expectEqualStrings("/", scan.stripDirIndex("README.md").?);
+}
+
+test "scan.resolveRelative counts the levels SuperMD dropped" {
+    // SuperMD strips the first two characters of a dotted link, so what
+    // reaches us for `../../x.md` is `/../x.md`. Each leading slash is a climb
+    // the author wrote and SuperMD discarded.
+    const climbing = scan.resolveRelative(2, "/../ref/X.md").?;
+    try std.testing.expectEqual(@as(usize, 0), climbing.prefix_len);
+    try std.testing.expectEqualStrings("ref/X.md", climbing.rest);
+
+    // Climbing to the root itself.
+    const to_root = scan.resolveRelative(3, "/../README.md").?;
+    try std.testing.expectEqual(@as(usize, 1), to_root.prefix_len);
+    try std.testing.expectEqualStrings("README.md", to_root.rest);
+
+    // A plain `./sibling.md` loses nothing and stays put.
+    const sibling = scan.resolveRelative(2, "/sibling.md").?;
+    try std.testing.expectEqual(@as(usize, 1), sibling.prefix_len);
+    try std.testing.expectEqualStrings("sibling.md", sibling.rest);
+
+    // Climbing above the content root names nothing that exists.
+    try std.testing.expect(scan.resolveRelative(1, "/../X.md") == null);
+    try std.testing.expect(scan.resolveRelative(0, "../X.md") == null);
 }

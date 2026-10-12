@@ -639,34 +639,22 @@ fn analyzeContent(
                                         .content_sub_path
                                         .slice(&variant.path_table);
 
-                                if (variant.path_table.getPathNoName(
+if (docs_mode) {
+                                    // Docs mode goes through the shared
+                                    // resolver so that a sibling link written
+                                    // with `../` climbs the same way a `.`
+                                    // link does.
+                                    if (docs.scan.resolvePageRef(
+                                        variant,
+                                        prefix,
+                                        link_ref,
+                                    )) |resolved| break :blk resolved;
+                                } else if (variant.path_table.getPathNoName(
                                     &variant.string_table,
                                     prefix,
                                     link_ref,
-                                )) |path| break :blk path;
-                                if (docs_mode) {
-                                    if (docs.scan.stripMdExtension(link_ref)) |stripped| {
-                                        if (variant.path_table.getPathNoName(
-                                            &variant.string_table,
-                                            prefix,
-                                            stripped,
-                                        )) |path| {
-                                            link_ref = stripped;
-                                            break :blk path;
-                                        }
-                                    }
-                                    // `dir/README.md` addresses the directory's
-                                    // index page, whose url is just `dir`.
-                                    if (docs.scan.stripDirIndex(link_ref)) |dir_path| {
-                                        if (variant.path_table.getPathNoName(
-                                            &variant.string_table,
-                                            prefix,
-                                            dir_path,
-                                        )) |path| {
-                                            link_ref = dir_path;
-                                            break :blk path;
-                                        }
-                                    }
+                                )) |path| {
+                                    break :blk path;
                                 }
 
                                 try errors.append(page_arena, .{
@@ -681,46 +669,47 @@ fn analyzeContent(
                             },
                             .sub => blk: {
                                 // Subpage means that the final path is
-                                // based on the current page's URL path. It
-                                // is only available on pages that are
-                                // sections. In docs mode a section's index
-                                // may be `README.md` rather than
-                                // `index.smd`.
-                                const is_index_page = if (docs_mode)
-                                    docs.scan.isIndex(page._scan.file.name.slice(
-                                        &variant.string_table,
-                                    ))
-                                else
-                                    page._scan.file.name == index_smd;
-                                if (!is_index_page) {
-                                    try errors.append(page_arena, .{
-                                        .node = n,
-                                        .kind = .not_a_section,
-                                    });
-                                    continue :outer;
-                                }
-
+                                // based on the current page's URL path.
+                                //
+                                // Docs mode resolves against the page's own
+                                // directory rather than requiring an index
+                                // page. The blog dialect has to insist on a
+                                // section index, because that is what defines
+                                // a section there; in a plain Markdown tree
+                                // every page is a page, and gating on it
+                                // rejected `./other.md` from any ordinary
+                                // document -- 171 spurious warnings on the
+                                // zigmodu corpus.
                                 var buf: std.ArrayList(String) = .empty;
                                 try buf.appendSlice(scratch, page._scan.file.path.slice(
                                     &variant.path_table,
                                 ));
 
-                                if (variant.path_table.getPathNoName(
-                                    &variant.string_table,
-                                    buf.items,
-                                    link_ref,
-                                )) |path| break :blk path;
                                 if (docs_mode) {
-                                    if (docs.scan.stripMdExtension(link_ref)) |stripped| {
-                                        if (variant.path_table.getPathNoName(
-                                            &variant.string_table,
-                                            buf.items,
-                                            stripped,
-                                        )) |path| {
-                                            link_ref = stripped;
-                                            break :blk path;
-                                        }
+                                    // `docs/scan.resolvePageRef` also strips
+                                    // the `..` components SuperMD leaves in
+                                    // place, which is what makes
+                                    // `[x](../../ref/Y.md)` work.
+                                    if (docs.scan.resolvePageRef(
+                                        variant,
+                                        buf.items,
+                                        link_ref,
+                                    )) |resolved| break :blk resolved;
+                                } else {
+                                    const is_index_page = page._scan.file.name == index_smd;
+                                    if (!is_index_page) {
+                                        try errors.append(page_arena, .{
+                                            .node = n,
+                                            .kind = .not_a_section,
+                                        });
+                                        continue :outer;
                                     }
+
+                                    if (variant.path_table.getPathNoName(
+                                        &variant.string_table,
+                                        buf.items,
+                                        link_ref,
+                                    )) |path| break :blk path;
                                 }
 
                                 try errors.append(page_arena, .{
