@@ -38,6 +38,7 @@ pub fn docsCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
         .theme_dir = cmd.theme_dir,
         .theme_keep_existing = cmd.theme_keep_existing,
         .strict_links = cmd.strict,
+        .exclude = cmd.exclude,
     }) catch fatal.oom();
 
     defer if (builtin.mode == .debug) build.deinit(io, gpa);
@@ -89,6 +90,7 @@ pub const DocsOptions = struct {
     theme_dir: ?[]const u8,
     theme_keep_existing: bool,
     strict: bool,
+    exclude: []const []const u8,
 
     pub fn deinit(co: *const DocsOptions, gpa: Allocator) void {
         var ba = co.build_assets;
@@ -104,6 +106,7 @@ pub const DocsOptions = struct {
         var theme_dir: ?[]const u8 = null;
         var theme_keep_existing = false;
         var strict = false;
+        var exclude: std.ArrayListUnmanaged([]const u8) = .empty;
         var output_dir_path: ?[]const u8 = null;
         const build_assets: std.StringArrayHashMapUnmanaged(BuildAsset) = .empty;
         var drafts = false;
@@ -161,6 +164,12 @@ pub const DocsOptions = struct {
                 theme_keep_existing = true;
             } else if (eql(u8, arg, "--strict")) {
                 strict = true;
+            } else if (eql(u8, arg, "--exclude")) {
+                idx += 1;
+                if (idx >= args.len) fatal.msg("error: missing argument to '{s}'", .{arg});
+                try exclude.append(gpa, args[idx]);
+            } else if (startsWith(u8, arg, "--exclude=")) {
+                try exclude.append(gpa, arg["--exclude=".len..]);
             } else if (eql(u8, arg, "--drafts")) {
                 drafts = true;
             } else if (startsWith(u8, arg, "-")) {
@@ -230,6 +239,7 @@ pub const DocsOptions = struct {
             .theme_dir = theme_dir,
             .theme_keep_existing = theme_keep_existing,
             .strict = strict,
+            .exclude = try exclude.toOwnedSlice(gpa),
         };
     }
 };
@@ -316,6 +326,13 @@ const help_message =
     \\  --keep-theme        Do not overwrite theme files that already exist
     \\                      in '.zdoc-theme/', so local edits survive a
     \\                      rebuild
+    \\  --exclude GLOB      Do not publish pages matching GLOB, relative to the
+    \\                      content directory. Repeatable. `*` stays within one
+    \\                      path segment, `**` crosses directories, so
+    \\                      'dev/**' removes a whole section. The same thing
+    \\                      can be said of a page with `exclude: true` in its
+    \\                      frontmatter, which on a section's index page
+    \\                      removes that section.
     \\  --strict            Exit non-zero when a link does not resolve. The
     \\                      site is still generated, so the output is there
     \\                      to inspect.

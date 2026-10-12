@@ -604,6 +604,9 @@ pub const Options = struct {
     /// to on, and is turned off only when the content is not in a repository,
     /// which costs one subprocess that exits without an answer.
     git_dates: bool = true,
+    /// Docs mode only: globs, relative to the content directory, naming pages
+    /// to leave out of the site entirely. Repeatable.
+    exclude: []const []const u8 = &.{},
 
     pub const Mode = union(enum) {
         memory,
@@ -1051,6 +1054,32 @@ pub fn run(
     // Read every page's last-modified date in one pass, before the pages are
     // analyzed, so a page can be stamped as it is loaded. `options.base_dir_path`
     // is the repository the content was committed from.
+    // Applied after parsing, because `exclude` is a frontmatter field and the
+    // page it excludes may be the section index of pages that have already
+    // been parsed. Deactivating a page is what keeps it out of everything
+    // downstream at once: the renderer, the sidebar, the sitemap and the
+    // search index all skip inactive pages.
+    var docs_excluded_pages: usize = 0;
+    if (cfg.isDocs()) {
+        for (build.variants) |*v| {
+            const dropped = docs.Exclude.apply(gpa, v, .{
+                .globs = options.exclude,
+            }) catch |err| switch (err) {
+                error.OutOfMemory => fatal.oom(),
+                // The only writer here is the page path, which is allocated
+                // from `gpa`; a write failure is not reachable in practice.
+                error.WriteFailed => 0,
+            };
+            docs_excluded_pages += dropped;
+        }
+        if (docs_excluded_pages > 0) {
+            std.debug.print(
+                \\{d} page(s) excluded and not published.
+                \\
+            , .{docs_excluded_pages});
+        }
+    }
+
     if (cfg.isDocs() and options.git_dates) {
         // Deliberately not scoped to a block: the map's keys are arena
         // allocated and live as long as the build does, so the arena must

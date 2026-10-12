@@ -29,6 +29,8 @@ pub const Search = @import("docs/Search.zig");
 pub const Sitemap = @import("docs/Sitemap.zig");
 /// `:::` container rewriting.
 pub const Containers = @import("docs/Containers.zig");
+/// Keeping pages out of the site.
+pub const Exclude = @import("docs/Exclude.zig");
 const Variant = @import("Variant.zig");
 const StringTable = @import("StringTable.zig");
 const PathTable = @import("PathTable.zig");

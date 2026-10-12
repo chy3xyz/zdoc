@@ -73,6 +73,12 @@ custom: ziggy.Dynamic = .{ .kv = .empty },
 /// It is a sentinel rather than an optional because the template value type
 /// has no representation for `?i64`.
 order: i64 = no_order,
+/// Documentation mode: this page is not built at all.
+///
+/// Distinct from `hidden`, which only keeps a page out of the sidebar. An
+/// excluded page produces no HTML, no sitemap entry and no search record; on a
+/// directory's index page it removes the whole section below it.
+exclude: bool = false,
 /// Documentation-mode flags. These have no meaning in blog mode, where the
 /// content tree and the date decide what is published.
 hidden: bool = false,
@@ -644,6 +650,7 @@ fn parseDocsFrontmatter(
         .draft = f.draft orelse false,
         .order = f.order orelse no_order,
         .hidden = f.hidden orelse false,
+        .exclude = f.exclude orelse false,
         .nav = f.nav orelse false,
                 ._parse = .{
             .active = (f.draft orelse false) == false or drafts,

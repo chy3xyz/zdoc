@@ -11,4 +11,5 @@ test {
     _ = @import("docs/Search.zig");
     _ = @import("docs/Sitemap.zig");
     _ = @import("docs/Containers.zig");
+    _ = @import("docs/Exclude.zig");
 }

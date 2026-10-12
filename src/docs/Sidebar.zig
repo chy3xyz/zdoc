@@ -312,6 +312,19 @@ fn flatten(
     // Directories first: readers look for the section, then the page.
     for (dir.dirs.items) |child_path| {
         const child = dirs.get(child_path) orelse continue;
+
+        // A section whose index page is hidden leaves the sidebar entirely,
+        // children included. Hiding only the index would leave a section
+        // label with no page behind it, which reads as a broken link rather
+        // than as an author hiding a draft.
+        //
+        // This is the difference from `exclude`, which also stops the pages
+        // being built: `hidden` is for something still worth publishing at a
+        // URL, `exclude` is for something that should not be published at all.
+        if (child.index_page) |ip| {
+            if (ip.hidden) continue;
+        }
+
         // A directory's index page titles the section far better than the
         // directory name does: `ai/` holds a README whose H1 explains what the
         // section is for. Only fall back to the directory name when there is
