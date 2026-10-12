@@ -304,15 +304,14 @@ pub const Fields = struct {
     /// When true the page is not built at all. On a directory's index page
     /// this also removes the whole section below it.
     exclude: ?bool = null,
-    nav: ?bool = null,
     tags: []const []const u8 = &.{},
     hero: Hero = .{},
     features: []const Feature = &.{},
 
     pub fn has(_: Fields, key: []const u8) bool {
         const known = [_][]const u8{
-            "title",  "description", "layout", "draft",
-            "order",  "hidden",      "exclude", "nav",   "tags",
+            "title",   "description", "layout", "draft",
+            "order",   "hidden",      "exclude", "tags",
         };
         for (known) |k| {
             if (std.mem.eql(u8, key, k)) return true;
@@ -636,8 +635,6 @@ fn noteConstructs(self: *Parser, raw: []const u8) Allocator.Error!void {
             self.f.hidden = boolean(v);
         } else if (std.mem.eql(u8, pair.key, "exclude")) {
             self.f.exclude = boolean(v);
-        } else if (std.mem.eql(u8, pair.key, "nav")) {
-            self.f.nav = boolean(v);
         } else if (std.mem.eql(u8, pair.key, "order")) {
             self.f.order = std.fmt.parseInt(i64, v, 10) catch null;
         }

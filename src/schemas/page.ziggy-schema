@@ -69,9 +69,6 @@ struct Page {
     /// HTML, no sitemap entry, no search record. On a directory's index page
     /// it removes the whole section below it.
     exclude: ?bool,
-    /// Documentation mode: when false, this page is left out of any
-    /// navigation built from frontmatter. Defaults to true.
-    nav: ?bool,
 
     union Date {
         /// A RFC3339 date string, e.g. "1990/01/01" or "1990/01/01T00:00:00".

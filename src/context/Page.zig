@@ -82,7 +82,6 @@ exclude: bool = false,
 /// Documentation-mode flags. These have no meaning in blog mode, where the
 /// content tree and the date decide what is published.
 hidden: bool = false,
-nav: bool = true,
 /// Home-page frontmatter data.
 ///
 /// These live in `_meta` rather than alongside `title` because the template
@@ -651,7 +650,6 @@ fn parseDocsFrontmatter(
         .order = f.order orelse no_order,
         .hidden = f.hidden orelse false,
         .exclude = f.exclude orelse false,
-        .nav = f.nav orelse false,
                 ._parse = .{
             .active = (f.draft orelse false) == false or drafts,
             .forbid_subsections = false,

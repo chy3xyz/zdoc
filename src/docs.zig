@@ -292,7 +292,7 @@ pub fn passthroughLink(
 
     // Reconstruct what the author wrote. Page links keep their fragment in
     // `Link.ref` rather than in the path, so both halves are needed.
-    const target = switch (dir.kind) {
+    const target: []const u8 = switch (dir.kind) {
         .link => |lnk| blk: {
             const src = lnk.src orelse break :blk "";
             switch (src) {
@@ -316,8 +316,26 @@ pub fn passthroughLink(
         else => "",
     };
 
-    dir.kind = .{ .link = .{ .src = .{ .url = target } } };
-    return target;
+    // SuperMD classifies a link by its first character and then discards the
+    // first two characters of the target, so `../AGENTS.md` reaches this point
+    // as `/AGENTS.md`, the two discarded characters being the `..`. A ref
+    // that begins with `/` is therefore a target whose climb was spent, and
+    // putting those two characters back recovers exactly what was written.
+    //
+    // The prefix is `..` and not `../`: the ref still carries the separator,
+    // so `..` ++ `/AGENTS.md` is `../AGENTS.md` again.
+    //
+    // This is not cosmetic. Without it, `[x](../AGENTS.md)` was published as
+    // `/AGENTS.md` -- a different URL from the one in the source, pointing at
+    // a place the author never wrote about, with a warning that claimed the
+    // link had been left as written.
+    const restored = if (target.len != 0 and target[0] == '/')
+        try std.mem.concat(gpa, u8, &.{ "..", target })
+    else
+        target;
+
+    dir.kind = .{ .link = .{ .src = .{ .url = restored } } };
+    return restored;
 }
 
 /// Runs every docs-mode transformation over a freshly parsed document and
