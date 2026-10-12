@@ -242,36 +242,80 @@ fn flatten(
 ) Allocator.Error!void {
     // Scan order is whatever the filesystem yielded, which is not something a
     // reader can navigate, so sort each group by the label that is shown.
+    //
+    // A numeric prefix orders the group the way the author wrote it --
+    // `01-guide/` before `02-api/` -- so the sort has to read it as a number.
+    // Byte order would put `10-` before `2-`, which is exactly the outcome the
+    // prefix was written to avoid.
     std.mem.sort(Path, dir.dirs.items, v, struct {
         fn lessThan(ctx: *const Variant, lhs: Path, rhs: Path) bool {
-            return std.mem.lessThan(
-                u8,
-                dirName(ctx, lhs),
-                dirName(ctx, rhs),
-            );
+            return naturalLess(dirName(ctx, lhs), dirName(ctx, rhs));
         }
     }.lessThan);
 
     std.mem.sort(*const Page, dir.pages.items, v, struct {
         fn lessThan(ctx: *const Variant, lhs: *const Page, rhs: *const Page) bool {
             _ = ctx;
+            // `order` is the one thing a frontmatter can say about order; when
+            // it is absent the title decides, as it always did.
+            if (lhs.order != rhs.order) return lhs.order < rhs.order;
             if (std.mem.eql(u8, lhs.title, rhs.title)) {
                 return lhs._scan.page_id < rhs._scan.page_id;
             }
-            return std.mem.lessThan(u8, lhs.title, rhs.title);
+            return naturalLess(lhs.title, rhs.title);
         }
     }.lessThan);
 
     // Directories first: readers look for the section, then the page.
     for (dir.dirs.items) |child_path| {
         const child = dirs.get(child_path) orelse continue;
-        try out.append(arena, Item.init(child.name, child.index_page, depth, true));
+        // A directory's index page titles the section far better than the
+        // directory name does: `ai/` holds a README whose H1 explains what the
+        // section is for. Only fall back to the directory name when there is
+        // no index page to ask.
+        const label = if (child.index_page) |ip| ip.title else child.name;
+        try out.append(arena, Item.init(label, child.index_page, depth, true));
         try flatten(arena, v, dirs, child, depth + 1, out);
     }
 
     for (dir.pages.items) |p| {
+        if (p.hidden) continue;
         try out.append(arena, Item.init(p.title, p, depth, false));
     }
+}
+
+/// Compares two labels the way a reader expects a list of them to read.
+///
+/// Leading digit runs compare as numbers, so `2-foo` precedes `10-foo`. Only
+/// the leading run is numeric -- an author writing `01-guide/` means to order
+/// the directory, not to renumber the words after it.
+fn naturalLess(lhs: []const u8, rhs: []const u8) bool {
+    const l_digits = digitRun(lhs);
+    const r_digits = digitRun(rhs);
+
+    if (l_digits > 0 and r_digits > 0) {
+        // Skip leading zeros so `01` and `1` order the same, then compare by
+        // length first: fewer digits is the smaller number.
+        const l_trim = trimZeros(lhs[0..l_digits]);
+        const r_trim = trimZeros(rhs[0..r_digits]);
+        if (l_trim.len != r_trim.len) return l_trim.len < r_trim.len;
+        if (std.mem.order(u8, l_trim, r_trim) == .lt) return true;
+        if (std.mem.order(u8, l_trim, r_trim) == .gt) return false;
+    }
+
+    return std.mem.lessThan(u8, lhs, rhs);
+}
+
+fn digitRun(s: []const u8) usize {
+    var i: usize = 0;
+    while (i < s.len and std.ascii.isDigit(s[i])) i += 1;
+    return i;
+}
+
+fn trimZeros(s: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i + 1 < s.len and s[i] == '0') i += 1;
+    return s[i..];
 }
 
 const testing = std.testing;
@@ -290,4 +334,26 @@ test "Item.class encodes the nesting depth" {
         "sidebar__item sidebar__item--d3",
         Item.init("a", null, 9, false).class,
     );
+}
+
+test "naturalLess reads a numeric prefix as a number" {
+    // The whole point of the convention: byte order gets this backwards.
+    try testing.expect(naturalLess("02-api", "10-operations"));
+    try testing.expect(!naturalLess("10-operations", "02-api"));
+
+    // Leading zeros do not change the value, so `01` and `1` tie and the
+    // remaining bytes decide.
+    try testing.expect(naturalLess("01-guide", "02-api"));
+
+    // Differing digit counts compare by magnitude.
+    try testing.expect(naturalLess("2-foo", "10-foo"));
+    try testing.expect(!naturalLess("10-foo", "2-foo"));
+
+    // Plain labels still sort alphabetically.
+    try testing.expect(naturalLess("apple", "banana"));
+    try testing.expect(!naturalLess("banana", "apple"));
+
+    // A label with no digits at the front sorts after one that has them,
+    // rather than being compared digit-run against nothing.
+    try testing.expect(naturalLess("1-a", "b"));
 }
