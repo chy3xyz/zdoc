@@ -27,6 +27,8 @@ pub const GitDates = @import("docs/GitDates.zig");
 pub const Search = @import("docs/Search.zig");
 /// `sitemap.xml` generation.
 pub const Sitemap = @import("docs/Sitemap.zig");
+/// `:::` container rewriting.
+pub const Containers = @import("docs/Containers.zig");
 const Variant = @import("Variant.zig");
 const StringTable = @import("StringTable.zig");
 const PathTable = @import("PathTable.zig");

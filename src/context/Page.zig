@@ -500,9 +500,14 @@ pub fn parse(
                     .ast = undefined,
                 },
             };
-            const ast = supermd.Ast.init(gpa, full_src, cmark, .{
-                .auto_target_blank = cfg.supermd.auto_target_blank,
-            }) catch fatal.oom();
+            const nofm_rewritten = docs.Containers.rewrite(arena, full_src) catch
+                fatal.oom();
+            const ast = supermd.Ast.init(
+                gpa,
+                if (nofm_rewritten) |r| r else full_src,
+                cmark,
+                .{ .auto_target_blank = cfg.supermd.auto_target_blank },
+            ) catch fatal.oom();
             p._parse.ast = ast;
             p._analysis.warnings = docs.postProcess(
                 gpa,
@@ -657,7 +662,15 @@ fn parseDocsFrontmatter(
         },
     };
 
-    const ast = supermd.Ast.init(gpa, full_src[body_start.offset..], cmark, .{
+    // `:::` containers are rewritten before SuperMD sees the text, because
+    // SuperMD has no syntax for them and its `setDirective` can only attach a
+    // directive to a node that already exists -- there is no way to build the
+    // blockquote these need after the fact.
+    const body_src = full_src[body_start.offset..];
+    const rewritten = docs.Containers.rewrite(arena, body_src) catch fatal.oom();
+    const md_src = if (rewritten) |r| r else body_src;
+
+    const ast = supermd.Ast.init(gpa, md_src, cmark, .{
         .auto_target_blank = false,
     }) catch fatal.oom();
     p._parse.ast = ast;

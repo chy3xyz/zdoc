@@ -10,4 +10,5 @@ test {
     _ = @import("docs/GitDates.zig");
     _ = @import("docs/Search.zig");
     _ = @import("docs/Sitemap.zig");
+    _ = @import("docs/Containers.zig");
 }

@@ -745,3 +745,61 @@ pre.mermaid svg {
   color: var(--text-dim);
   font-size: 14px;
 }
+
+/* -------------------------------------------------------------- containers
+ *
+ * `::: tip` and friends render as SuperMD block directives, which produce
+ * `<div class="block tip">`. The colour is on the container and the padding
+ * on the body, so that a container with several paragraphs reads as one box
+ * rather than as several bordered boxes.
+ */
+
+.block {
+  margin: 16px 0;
+  padding: 12px 16px;
+  border-left: 3px solid var(--border);
+  border-radius: 0 6px 6px 0;
+  background: var(--bg-soft);
+}
+
+.block > :first-child {
+  margin-top: 0;
+}
+
+.block > :last-child {
+  margin-bottom: 0;
+}
+
+.block.tip,
+.block.info {
+  border-left-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.block.warning {
+  border-left-color: #d97706;
+  background: var(--warn-bg);
+}
+
+.block.danger {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+}
+
+.block.note,
+.block.details,
+.block.tabs,
+.block.code-group {
+  border-left-color: var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+  .block.tip,
+  .block.info {
+    background: #0d1f38;
+  }
+
+  .block.danger {
+    background: #2d1416;
+  }
+}
