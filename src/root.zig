@@ -596,6 +596,10 @@ pub const Options = struct {
     /// Docs mode only: keep theme files that already exist on disk instead of
     /// overwriting them, so a hand-edited `.zdoc-theme/` survives a rebuild.
     theme_keep_existing: bool = false,
+    /// Docs mode only: exit non-zero when a link does not resolve. Defaults to
+    /// false, because a docs tree routinely links to files outside itself and
+    /// failing the build over those helps nobody.
+    strict_links: bool = false,
 
     pub const Mode = union(enum) {
         memory,
@@ -1376,8 +1380,12 @@ pub fn run(
             \\
             \\{d} link(s) could not be resolved and were left as written.
             \\
-            \\
         , .{link_warning_count});
+
+        // `--strict` turns the count into a non-zero exit so a CI job can
+        // fail on a dead link. The site is generated either way: withholding
+        // the output would make the failure harder to investigate, not easier.
+        if (options.strict_links) build.docs_link_errors = link_warning_count;
     }
 
     if (warning_count > 0) {

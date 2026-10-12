@@ -27,6 +27,10 @@ cfg: *const root.Config,
 build_assets: *const std.StringArrayHashMapUnmanaged(BuildAsset),
 any_prerendering_error: bool = false,
 any_rendering_error: std.atomic.Value(bool) = .{ .raw = false },
+/// Docs mode with `--strict`: at least one link did not resolve. The site is
+/// still generated -- the point is to fail CI, not to withhold output -- but
+/// the command exits non-zero.
+docs_link_errors: usize = 0,
 
 base_dir_path: []const u8,
 base_dir: Io.Dir,

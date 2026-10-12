@@ -37,6 +37,7 @@ pub fn docsCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
         },
         .theme_dir = cmd.theme_dir,
         .theme_keep_existing = cmd.theme_keep_existing,
+        .strict_links = cmd.strict,
     }) catch fatal.oom();
 
     defer if (builtin.mode == .debug) build.deinit(io, gpa);
@@ -49,6 +50,18 @@ pub fn docsCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
     }
 
     if (build.any_prerendering_error or build.any_rendering_error.load(.acquire)) {
+        return true;
+    }
+
+    // `--strict` reports a non-zero exit for dead links, but only after the
+    // site has been written: a CI failure over a broken link should still
+    // leave the output in place to look at.
+    if (build.docs_link_errors > 0) {
+        std.debug.print(
+            \\error: {d} link(s) did not resolve and --strict is set.
+            \\\nThe site was generated; failing because of the dead links above.
+            \\\n
+        , .{build.docs_link_errors});
         return true;
     }
 
@@ -75,6 +88,7 @@ pub const DocsOptions = struct {
     force: bool,
     theme_dir: ?[]const u8,
     theme_keep_existing: bool,
+    strict: bool,
 
     pub fn deinit(co: *const DocsOptions, gpa: Allocator) void {
         var ba = co.build_assets;
@@ -89,6 +103,7 @@ pub const DocsOptions = struct {
         var url_path_prefix: ?[]const u8 = null;
         var theme_dir: ?[]const u8 = null;
         var theme_keep_existing = false;
+        var strict = false;
         var output_dir_path: ?[]const u8 = null;
         const build_assets: std.StringArrayHashMapUnmanaged(BuildAsset) = .empty;
         var drafts = false;
@@ -144,6 +159,8 @@ pub const DocsOptions = struct {
                 theme_dir = arg["--theme-dir=".len..];
             } else if (eql(u8, arg, "--keep-theme")) {
                 theme_keep_existing = true;
+            } else if (eql(u8, arg, "--strict")) {
+                strict = true;
             } else if (eql(u8, arg, "--drafts")) {
                 drafts = true;
             } else if (startsWith(u8, arg, "-")) {
@@ -212,6 +229,7 @@ pub const DocsOptions = struct {
             .force = force,
             .theme_dir = theme_dir,
             .theme_keep_existing = theme_keep_existing,
+            .strict = strict,
         };
     }
 };
@@ -298,6 +316,9 @@ const help_message =
     \\  --keep-theme        Do not overwrite theme files that already exist
     \\                      in '.zdoc-theme/', so local edits survive a
     \\                      rebuild
+    \\  --strict            Exit non-zero when a link does not resolve. The
+    \\                      site is still generated, so the output is there
+    \\                      to inspect.
     \\  --force, -f         Ignore other files in the output directory
     \\  --help, -h          Show this help menu
     \\
