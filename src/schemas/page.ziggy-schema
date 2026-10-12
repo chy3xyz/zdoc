@@ -59,6 +59,14 @@ struct Page {
     /// User-defined properties that you can reference from SuperHTML via
     /// '$page.custom'
     custom: {:}any,
+    /// Documentation mode: sorts this page ahead of its siblings in the
+    /// sidebar. Pages without one sort by the conventions in their path.
+    order: ?int,
+    /// Documentation mode: when true, this page is left out of the sidebar.
+    hidden: ?bool,
+    /// Documentation mode: when false, this page is left out of any
+    /// navigation built from frontmatter. Defaults to true.
+    nav: ?bool,
 
     union Date {
         /// A RFC3339 date string, e.g. "1990/01/01" or "1990/01/01T00:00:00".

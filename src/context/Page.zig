@@ -26,6 +26,10 @@ const Bool = context.Bool;
 const String = context.String;
 const Build = @import("../Build.zig");
 const Variant = @import("../Variant.zig");
+
+/// Sentinel for "this page did not declare an order". Any real order is a
+/// small integer, so this cannot collide with one.
+pub const no_order: i64 = std.math.minInt(i64);
 const PathTable = @import("../PathTable.zig");
 const Path = PathTable.Path;
 const PathName = PathTable.PathName;
@@ -39,6 +43,10 @@ pub const ziggy_options: ziggy.Options(Page) = .{
         ._parse,
         ._analysis,
         ._render,
+        // Not frontmatter fields: these are populated by the docs-mode YAML
+        // reader, and are read through builtins rather than the schema.
+        ._hero,
+        ._features,
     },
 };
 
@@ -59,6 +67,23 @@ alternatives: []const Alternative = &.{},
 translation_key: ?[]const u8 = null,
 forbid_subsections: bool = false,
 custom: ziggy.Dynamic = .{ .kv = .empty },
+
+/// Documentation-mode ordering hint from frontmatter. `no_order` means the
+/// author did not set one and the sidebar falls back to its own conventions.
+/// It is a sentinel rather than an optional because the template value type
+/// has no representation for `?i64`.
+order: i64 = no_order,
+/// Documentation-mode flags. These have no meaning in blog mode, where the
+/// content tree and the date decide what is published.
+hidden: bool = false,
+nav: bool = true,
+/// Home-page frontmatter data.
+///
+/// These live in `_meta` rather than alongside `title` because the template
+/// value type has no representation for them, and every field on the outer
+/// struct is reflected into one. The home layout reads them through builtins.
+_hero: docs.frontmatter.Hero = .{},
+_features: []const docs.frontmatter.Feature = &.{},
 
 /// Only present in debug builds to catch programming errors
 /// in the processing pipeline.
@@ -121,6 +146,10 @@ _analysis: struct {
     /// Link problems that docs mode tolerates. Each of these has already had
     /// its link rewritten to pass through verbatim.
     link_warnings: std.ArrayList(PageAnalysisError) = .empty,
+    /// Frontmatter constructs docs mode recognized but did not read. Reported
+    /// so that "my metadata was ignored" is distinguishable from "I have no
+    /// metadata".
+    frontmatter_skipped: []docs.frontmatter.Skipped = &.{},
 } = .{},
 
 // Valid if analysis contains no errors and build mode == .memory
@@ -323,7 +352,7 @@ pub fn parse(
     cfg: *const root.Config,
     drafts: bool,
     progress: ?std.Progress.Node,
-    variant: *const @import("../Variant.zig"),
+    variant: *const Variant,
 ) void {
     const zone = tracy.trace(@src());
     defer zone.end();
@@ -411,6 +440,20 @@ pub fn parse(
         const consumed: usize = "---".len + has_newline;
         break :blk lead + consumed;
     };
+
+    const has_frontmatter = frontmatter_start != null;
+    if (has_frontmatter and cfg.isDocs()) {
+        parseDocsFrontmatter(
+            p,
+            gpa,
+            cmark,
+            drafts,
+            full_src,
+            frontmatter_start.?,
+            variant,
+        );
+        return;
+    }
 
     const ziggy_start = frontmatter_start orelse {
         // No frontmatter. In docs mode this is the common case: the page is
@@ -527,6 +570,144 @@ pub fn parse(
     p.date.load() catch |err| {
         p._parse.date_err = err;
     };
+}
+
+/// Parses a documentation-mode page that opens with a frontmatter delimiter.
+///
+/// This exists instead of falling through to Ziggy because documentation
+/// carries YAML, not Ziggy. Handing YAML to Ziggy made it report a parse
+/// error, and a parse error on any single page aborts the whole build -- one
+/// file with a VitePress homepage header took the entire site down with it.
+///
+/// The contract that makes docs mode safe is that this function never leaves
+/// `status` as anything but `.parsed`. A frontmatter construct we cannot read
+/// becomes a warning and the page renders as if that field were absent; the
+/// author's prose is never at the mercy of a parser we do not control.
+fn parseDocsFrontmatter(
+    p: *Page,
+    gpa: Allocator,
+    cmark: supermd.Ast.CmarkParser,
+    drafts: bool,
+    full_src: [:0]const u8,
+    /// Byte offset of the first character after the opening delimiter.
+    fm_start: usize,
+    variant: *const Variant,
+) void {
+    const body_start = findBodyStart(full_src, fm_start);
+
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    const arena = arena_state.allocator();
+
+    const fm_src = full_src[fm_start..body_start.fm_end];
+    const result = docs.frontmatter.parse(arena, fm_src) catch |err| switch (err) {
+        error.OutOfMemory => fatal.oom(),
+    };
+    const f = result.fields;
+
+    p.* = .{
+        .title = f.title orelse "",
+        .description = f.description orelse "",
+        .layout = f.layout orelse "",
+        .tags = f.tags,
+        .draft = f.draft orelse false,
+        .order = f.order orelse no_order,
+        .hidden = f.hidden orelse false,
+        .nav = f.nav orelse false,
+                ._parse = .{
+            .active = (f.draft orelse false) == false or drafts,
+            .forbid_subsections = false,
+            .arena = arena_state.state,
+            .full_src = full_src,
+            .status = .parsed,
+            .ziggy_start = @intCast(fm_start),
+            // Rendering slices the body out of `full_src` at this offset, so it
+            // has to describe the same block the reader consumed.
+            .ziggy_doc = .{
+                .end = @intCast(body_start.offset),
+                .lines = @intCast(std.mem.countScalar(u8, fm_src, '\n')),
+            },
+            .ast = undefined,
+        },
+    };
+
+    const ast = supermd.Ast.init(gpa, full_src[body_start.offset..], cmark, .{
+        .auto_target_blank = false,
+    }) catch fatal.oom();
+    p._parse.ast = ast;
+    p._hero = f.hero;
+    p._features = f.features;
+
+    p._analysis.warnings = docs.postProcess(gpa, &p._parse.ast) catch fatal.oom();
+    p._analysis.frontmatter_skipped = @constCast(result.skipped);
+
+    // Frontmatter is optional and so is every field in it: a page that sets
+    // none of them still needs a title and a layout.
+    if (p.layout.len == 0) p.layout = docs.default_layout;
+    if (p.title.len == 0) {
+        p.title = docs.titleFromHeadings(gpa, &p._parse.ast) catch |err| switch (err) {
+            error.OutOfMemory => fatal.oom(),
+        } orelse std.fs.path.stem(p._scan.file.name.slice(&variant.string_table));
+    }
+
+    // Report what the reader could not use, so that "my metadata was ignored"
+    // is distinguishable from "I have no metadata".
+    if (result.skipped.len > 0) {
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const path = std.mem.trim(u8, std.fmt.bufPrint(&path_buf, "{f}", .{
+            p._scan.file.fmt(
+                &variant.string_table,
+                &variant.path_table,
+                variant.content_dir_path,
+                "",
+            ),
+        }) catch unreachable, "\n");
+        for (result.skipped) |s| {
+            std.debug.print("{s}:{d}: warning: {s}\n", .{
+                path,
+                s.line + 1,
+                docs.frontmatter.Skipped.explain(s.construct),
+            });
+        }
+    }
+}
+
+/// Locates where a page's body begins, given the offset just past its opening
+/// frontmatter delimiter.
+///
+/// A frontmatter block that is never closed runs to the end of the document,
+/// which leaves the page with no body. That is the honest reading of a file
+/// whose frontmatter swallows everything, and it still does not fail the
+/// build.
+const BodyStart = struct {
+    /// Byte offset into `full_src` where the body starts.
+    offset: usize,
+    /// Byte offset into `full_src` where the frontmatter block ends, before
+    /// the closing delimiter. This is what the reader consumes.
+    fm_end: usize,
+    /// True when a closing delimiter was actually found.
+    closed: bool,
+};
+
+fn findBodyStart(full_src: [:0]const u8, fm_start: usize) BodyStart {
+    var line_start = fm_start;
+    while (line_start < full_src.len) {
+        const nl = std.mem.indexOfScalarPos(u8, full_src, line_start, '\n');
+        const line_end = if (nl) |p| p else full_src.len;
+        const line = std.mem.trim(u8, full_src[line_start..line_end], " \t\r");
+
+        if (std.mem.eql(u8, line, "---")) {
+            // The reader must not see the closing delimiter: it would read as
+            // a key named `---` and report the block as malformed.
+            return .{
+                .offset = if (nl) |p| p + 1 else full_src.len,
+                .fm_end = line_start,
+                .closed = true,
+            };
+        }
+        if (nl == null) break;
+        line_start = nl.? + 1;
+    }
+    return .{ .offset = full_src.len, .fm_end = full_src.len, .closed = false };
 }
 
 pub const Translation = struct {

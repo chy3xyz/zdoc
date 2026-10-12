@@ -381,6 +381,19 @@ fn setupUnitTests(b: *std.Build, test_step: *std.Build.Step) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+
+    // The frontmatter reader is pure Zig with no dependency on the rest of the
+    // codebase either, so it is tested the same way. It is the one component
+    // that can abort an entire build over a single page, so it is worth
+    // testing in isolation.
+    const frontmatter_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docs/frontmatter.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(frontmatter_tests).step);
 }
 
 fn setupSchemaCheck(

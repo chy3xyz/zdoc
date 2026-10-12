@@ -1029,6 +1029,9 @@ pub fn run(
     }
 
     var parse_errors = false;
+    // Docs-mode pages that named a layout zdoc does not ship. Counted so the
+    // summary can mention them once instead of per page.
+    var docs_layout_warnings: usize = 0;
     var pages_to_analyze: usize = 0;
     var progress_page_analyze = progress.start("Analyze pages", 0);
     {
@@ -1199,21 +1202,27 @@ pub fn run(
                 // This is in some ways frontmatter analysis work but it's done
                 // here because we have to scan all pages for errors anyway.
                 layout: {
-                    const layout_pn = PathName.get(&build.st, &build.pt, p.layout) orelse {
-                        // We can use analysis because a page that has
-                        // parse.status == ok will have initialized the field for
-                        // us.
-                        try p._analysis.frontmatter.append(gpa, .layout);
-                        break :layout;
-                    };
+                    const layout_pn = PathName.get(&build.st, &build.pt, p.layout);
+                    const layout = if (layout_pn) |pn| build.templates.getPtr(pn) else null;
 
-                    const layout = build.templates.getPtr(layout_pn) orelse {
-                        try p._analysis.frontmatter.append(gpa, .layout);
+                    // In docs mode a page naming a layout zdoc does not ship --
+                    // `layout: home`, say -- is asking for a feature, not
+                    // making a typo. Fall back to the documentation layout so
+                    // the site still builds, and warn. Aborting would undo the
+                    // point of docs mode: one unknown layout would take every
+                    // other page down with it.
+                    if ((layout_pn == null or layout == null or !layout.?.layout) and
+                        build.cfg.isDocs())
+                    {
+                        docs_layout_warnings += 1;
+                        printDocsLayoutWarning(v, p);
+                        p.layout = docs.default_layout;
                         break :layout;
-                    };
+                    }
 
-                    if (!layout.layout) {
-                        // TODO: create a dedicated error
+                    // We can use analysis because a page that has
+                    // parse.status == ok will have initialized the field for us.
+                    if (layout_pn == null or layout == null or !layout.?.layout) {
                         try p._analysis.frontmatter.append(gpa, .layout);
                         break :layout;
                     }
@@ -1223,31 +1232,14 @@ pub fn run(
                             &build.st,
                             &build.pt,
                             alt.layout,
-                        ) orelse {
-                            try p._analysis.frontmatter.append(gpa, .{
-                                .alternative = .{
-                                    .id = @intCast(aidx),
-                                    .kind = .layout,
-                                },
-                            });
-                            break :layout;
-                        };
+                        );
+                        const alt_layout = if (alt_layout_pn) |pn|
+                            build.templates.getPtr(pn)
+                        else
+                            null;
 
-                        const alt_layout = build.templates.getPtr(alt_layout_pn) orelse {
-                            // We can use analysis because a page that has
-                            // parse.status == ok will have initialized the field for
-                            // us.
-                            try p._analysis.frontmatter.append(gpa, .{
-                                .alternative = .{
-                                    .id = @intCast(aidx),
-                                    .kind = .layout,
-                                },
-                            });
-                            break :layout;
-                        };
-
-                        if (!alt_layout.layout) {
-                            // TODO: create a dedicated error
+                        // TODO: create a dedicated error
+                        if (alt_layout == null or !alt_layout.?.layout) {
                             try p._analysis.frontmatter.append(gpa, .{
                                 .alternative = .{
                                     .id = @intCast(aidx),
@@ -1388,6 +1380,16 @@ pub fn run(
         , .{warning_count});
     }
 
+    if (docs_layout_warnings > 0) {
+        std.debug.print(
+            \\
+            \\{d} page(s) named a layout zdoc does not ship and were rendered
+            \\with the documentation layout instead.
+            \\
+            \\
+        , .{docs_layout_warnings});
+    }
+
     var analysis_errors = false;
     for (build.variants) |*v| {
         for (v.pages.items) |*p| {
@@ -1402,11 +1404,12 @@ pub fn run(
 
                 const full_src = p._parse.full_src;
 
-                // Pages without frontmatter have no Ziggy AST to point at, so
-                // the precise selector machinery in `location` cannot be used.
-                // In docs mode that is the common case, so report the problems
-                // without a source selection instead of crashing.
-                if (p._parse.ziggy_start == 0) {
+                // A precise source selection needs a Ziggy AST to point into. Pages with
+                // no frontmatter have none, and neither do docs-mode pages
+                // whose frontmatter is YAML -- there is no Ziggy document to
+                // select from. Report those without a selection instead of
+                // crashing on an AST that was never built.
+                if (p._parse.ziggy_start == 0 or build.cfg.isDocs()) {
                     for (fm_errors.items) |err| {
                         std.debug.print("{f}: error: {s}\n", .{
                             p._scan.file.fmt(
@@ -2011,6 +2014,30 @@ pub fn run(
     progress_install_assets.end();
 
     return build;
+}
+
+/// Reports a docs-mode page that named a layout zdoc does not ship.
+///
+/// The page renders with the documentation layout instead. This is a warning
+/// rather than an error because the alternative is refusing to build the site
+/// over a header zdoc simply does not have a template for yet.
+fn printDocsLayoutWarning(
+    v: *Variant,
+    p: *const context.Page,
+) void {
+    std.debug.print(
+        \\{f}: warning: unknown layout '{s}', rendering as '{s}'
+        \\
+    , .{
+        p._scan.file.fmt(
+            &v.string_table,
+            &v.path_table,
+            v.content_dir_path,
+            "",
+        ),
+        p.layout,
+        docs.default_layout,
+    });
 }
 
 fn printSuperMdErrors(
