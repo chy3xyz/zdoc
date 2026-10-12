@@ -23,13 +23,155 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Signature = @import("../context/doctypes.zig").Signature;
+const Value = @import("../context.zig").Value;
 
 /// One entry of a `hero.actions` list.
 pub const Action = struct {
     text: []const u8 = "",
     link: []const u8 = "",
-    theme: []const u8 = "",
+    theme: []const u8 = "alt",
+
+    pub const Dot = true;
+
+    pub const Fields = struct {
+        pub const text =
+            \\The label on the button.
+        ;
+        pub const theme =
+            \\Either 'brand' or 'alt', selecting the button's emphasis.
+        ;
+    };
+
+    pub const Builtins = struct {
+        pub const link = struct {
+            pub const signature: Signature = .{ .ret = .String };
+
+            pub const docs_description =
+                \\The URL the button points at.
+                \\
+                \\A link into the docs tree is resolved to the page it names,
+                \\and anything else is emitted as written, so both a page
+                \\reference and an external URL work here.
+            ;
+
+            pub const examples =
+                \\<a href="$loop.it.link()">Read the docs</a>
+            ;
+
+            pub fn call(
+                a: Action,
+                gpa: Allocator,
+                ctx: *const @import("../context.zig").Root,
+                args: []const Value,
+            ) @import("../context.zig").CallError!Value {
+                if (args.len != 0) return .{ .err = "expected 0 arguments" };
+
+                var aw: std.Io.Writer.Allocating = .init(gpa);
+
+                // A hero link is written by hand and may point at another page
+                // in the docs, or at anything on the web. An absolute URL is
+                // emitted exactly as written -- prefixing one would corrupt it.
+                if (isAbsoluteUrl(a.link)) {
+                    aw.writer.writeAll(a.link) catch return error.OutOfMemory;
+                    return String.init(aw.written());
+                }
+
+                // Resolve a link into the docs tree against the content. A
+                // link that names no page is emitted as the path it was
+                // written as, so a stale reference reads as a broken path
+                // rather than as a doubled slash.
+                if (resolveHeroPage(ctx, a.link)) |p| {
+                    ctx.printLinkPrefix(&aw.writer, ctx.site._meta.variant_id, false) catch
+                        return error.OutOfMemory;
+                    const v = &ctx._meta.build.variants[ctx.site._meta.variant_id];
+                    aw.writer.print("{f}", .{p._scan.url.fmt(
+                        &v.string_table,
+                        &v.path_table,
+                        null,
+                        true,
+                    )}) catch return error.OutOfMemory;
+                    return String.init(aw.written());
+                }
+
+                aw.writer.writeAll(a.link) catch return error.OutOfMemory;
+                return String.init(aw.written());
+            }
+        };
+    };
 };
+
+/// Whether `link` is a URL in its own right, rather than a path into the docs
+/// tree.
+///
+/// The distinction matters twice over: an absolute URL must not be prefixed
+/// with the site's URL path, and it must not be looked up in the content tree
+/// either. The awkward case is a leading `//`, which is a protocol-relative
+/// URL in a browser but is far more often here a docs path written with a
+/// doubled slash, so it counts as absolute only when a host follows it.
+fn isAbsoluteUrl(link: []const u8) bool {
+    if (std.mem.startsWith(u8, link, "//")) {
+        const after = link["//".len..];
+        const host_len = std.mem.indexOfAny(u8, after, "/?#") orelse after.len;
+        return host_len > 0;
+    }
+
+    if (std.mem.indexOf(u8, link, "://")) |i| {
+        // `://` only introduces a scheme when the text before it is a scheme:
+        // a path is allowed to contain `:` and `/` without being a URL.
+        for (link[0..i]) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') return false;
+        }
+        return i > 0;
+    }
+
+    // A single-letter scheme has no `//` to find, so check the common ones
+    // by name rather than guessing at a colon.
+    for ([_][]const u8{ "mailto:", "tel:", "data:", "ftp:" }) |scheme| {
+        if (std.mem.startsWith(u8, link, scheme)) return true;
+    }
+
+    return false;
+}
+
+/// Finds the content page a hero action's `link:` names, if any.
+///
+/// Hero links are written as paths into the docs tree -- `/README`,
+/// `/guide/QUICK-START` -- matching how a VitePress home page spells them. The
+/// leading slash is the site's root, not a filesystem root, so it is stripped
+/// before the lookup.
+///
+/// `README` and `index` name the site root, whose URL is `/` and whose interned
+/// path is empty. Nothing else resolves to it, so it is matched by name here
+/// rather than by path.
+fn resolveHeroPage(
+    ctx: *const @import("../context.zig").Root,
+    link: []const u8,
+) ?*const PageT {
+    const v = &ctx._meta.build.variants[ctx.site._meta.variant_id];
+    const index_html: STString = @enumFromInt(11);
+    std.debug.assert(v.string_table.get("index.html") == index_html);
+
+    const ref = std.mem.trim(u8, std.mem.trimStart(u8, link, "/"), "/");
+    if (ref.len == 0) return null;
+
+    if (std.mem.eql(u8, ref, "README") or std.mem.eql(u8, ref, "README.md") or
+        std.mem.eql(u8, ref, "index") or std.mem.eql(u8, ref, "index.md"))
+    {
+        return &v.pages.items[v.root_index];
+    }
+
+    const path = v.path_table.getPathNoName(&v.string_table, &.{}, ref) orelse return null;
+    const pn: PathName = .{ .path = path, .name = index_html };
+    const hint = v.urls.get(pn) orelse return null;
+    if (hint.kind != .page_main) return null;
+    return &v.pages.items[hint.id];
+}
+
+const String = @import("../context.zig").String;
+const PageT = @import("../context.zig").Page;
+const STString = @import("../StringTable.zig").String;
+const PathName = @import("../PathTable.zig").PathName;
 
 /// The `hero` block of a home page.
 pub const Hero = struct {
@@ -43,6 +185,58 @@ pub const Hero = struct {
     /// legitimately declare an empty one, and the template needs to tell that
     /// apart from having no hero at all.
     present: bool = false,
+
+    pub const Dot = true;
+
+    pub const Fields = struct {
+        pub const name =
+            \\The product or project name shown as the hero headline.
+        ;
+        pub const text =
+            \\The one-line pitch shown under the name.
+        ;
+        pub const tagline =
+            \\The longer description shown under the pitch.
+        ;
+        pub const present =
+            \\True when the frontmatter declared a hero block at all.
+        ;
+    };
+
+    /// The hero's call-to-action buttons. Defined here rather than on the
+    /// template side because this is the only place that knows what an action
+    /// is; the layout just loops over them.
+    pub const Builtins = struct {
+        pub const actions = struct {
+            pub const signature: Signature = .{ .ret = .{ .Many = .Value } };
+
+            pub const docs_description =
+                \\The call-to-action buttons of a home page hero, each with
+                \\a `text`, a `link()` and a `theme` of 'brand' or 'alt'.
+            ;
+
+            pub const examples =
+                \\<a :loop="$page.hero.actions()"
+                \\   class="hero__action hero__action--$loop.it.theme"
+                \\   href="$loop.it.link()"
+                \\   :text="$loop.it.text"></a>
+            ;
+
+            pub fn call(
+                h: Hero,
+                gpa: Allocator,
+                ctx: *const @import("../context.zig").Root,
+                args: []const Value,
+            ) @import("../context.zig").CallError!Value {
+                _ = ctx;
+                if (args.len != 0) return .{ .err = "expected 0 arguments" };
+
+                const list = try gpa.alloc(Value, h.actions.len);
+                for (h.actions, 0..) |a, i| list[i] = .{ .hero_action = a };
+                return @import("../context.zig").Array.init(gpa, Value, list);
+            }
+        };
+    };
 };
 
 /// One entry of a `features` list.
@@ -50,6 +244,20 @@ pub const Feature = struct {
     title: []const u8 = "",
     details: []const u8 = "",
     icon: ?[]const u8 = null,
+
+    pub const Dot = true;
+
+    pub const Fields = struct {
+        pub const title =
+            \\The card's heading.
+        ;
+        pub const details =
+            \\The card's body text.
+        ;
+    };
+
+    // A feature card is plain data; there is nothing to compute from it.
+    pub const Builtins = struct {};
 };
 
 /// A construct the parser saw but did not read.

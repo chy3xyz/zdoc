@@ -45,8 +45,8 @@ pub const ziggy_options: ziggy.Options(Page) = .{
         ._render,
         // Not frontmatter fields: these are populated by the docs-mode YAML
         // reader, and are read through builtins rather than the schema.
-        ._hero,
-        ._features,
+        .hero,
+        .features,
     },
 };
 
@@ -82,8 +82,8 @@ nav: bool = true,
 /// These live in `_meta` rather than alongside `title` because the template
 /// value type has no representation for them, and every field on the outer
 /// struct is reflected into one. The home layout reads them through builtins.
-_hero: docs.frontmatter.Hero = .{},
-_features: []const docs.frontmatter.Feature = &.{},
+hero: docs.frontmatter.Hero = .{},
+features: []const docs.frontmatter.Feature = &.{},
 
 /// Only present in debug builds to catch programming errors
 /// in the processing pipeline.
@@ -634,8 +634,8 @@ fn parseDocsFrontmatter(
         .auto_target_blank = false,
     }) catch fatal.oom();
     p._parse.ast = ast;
-    p._hero = f.hero;
-    p._features = f.features;
+    p.hero = f.hero;
+    p.features = f.features;
 
     p._analysis.warnings = docs.postProcess(gpa, &p._parse.ast) catch fatal.oom();
     p._analysis.frontmatter_skipped = @constCast(result.skipped);
@@ -643,6 +643,7 @@ fn parseDocsFrontmatter(
     // Frontmatter is optional and so is every field in it: a page that sets
     // none of them still needs a title and a layout.
     if (p.layout.len == 0) p.layout = docs.default_layout;
+    p.layout = docs.layoutName(gpa, p.layout) catch fatal.oom();
     if (p.title.len == 0) {
         p.title = docs.titleFromHeadings(gpa, &p._parse.ast) catch |err| switch (err) {
             error.OutOfMemory => fatal.oom(),
@@ -939,7 +940,37 @@ pub const Fields = struct {
         \\A Ziggy map where you can define custom properties for the page,
         \\as set in the SuperMD frontmatter.
     ;
+    pub const order =
+        \\Documentation mode: this page's position among its siblings, as
+        \\set in the frontmatter.
+        \\
+        \\Zero when the author did not set one, in which case the sidebar
+        \\falls back to ordering by title.
+    ;
+    pub const hidden =
+        \\Documentation mode: when true this page is left out of the
+        \\sidebar, as set in the frontmatter.
+        \\
+        \\The page is still built and still reachable by URL.
+    ;
+    pub const hero =
+        \\Documentation mode: the hero block of a home page, as set in the
+        \\frontmatter. Empty for any page that does not declare one.
+    ;
+    pub const features =
+        \\Documentation mode: the feature cards of a home page, as set in
+        \\the frontmatter. Empty for any page that does not declare them.
+    ;
 };
+
+/// Documentation-mode home page hero, as read from frontmatter.
+pub const Hero = docs.frontmatter.Hero;
+
+/// One call-to-action button of a home page hero.
+pub const HeroAction = docs.frontmatter.Action;
+
+/// Documentation-mode home page feature card.
+pub const Feature = docs.frontmatter.Feature;
 
 pub const Builtins = struct {
     pub const isCurrent = struct {

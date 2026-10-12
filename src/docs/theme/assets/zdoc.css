@@ -93,6 +93,18 @@ a:hover {
   min-height: 100vh;
 }
 
+/* A landing page has no sidebar and no table of contents, so it centres its
+   content instead of sitting in a column between them. */
+.layout--bare {
+  display: block;
+}
+
+.layout--bare .home {
+  max-width: 896px;
+  margin: 0 auto;
+  padding: 0 24px 96px;
+}
+
 .sidebar {
   width: var(--sidebar-width);
   flex: 0 0 var(--sidebar-width);
@@ -521,5 +533,117 @@ pre.mermaid svg {
 
   .doc .header-anchor {
     display: none;
+  }
+}
+/* ---------------------------------------------------------------- home page
+ *
+ * Rendered for `layout: home`. The hero is the page's pitch; the feature
+ * cards below it are the short list of what the thing does. Everything is
+ * driven from frontmatter, so a home page is a block of YAML and nothing
+ * else.
+ */
+
+.hero {
+  padding: 64px 0 48px;
+  text-align: center;
+}
+
+.hero__name {
+  margin: 0 0 8px;
+  font-size: 48px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  border: 0;
+}
+
+.hero__text {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.hero__tagline {
+  margin: 0 auto;
+  max-width: 640px;
+  color: var(--text-dim);
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 28px;
+}
+
+.hero__action {
+  display: inline-block;
+  padding: 10px 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.hero__action:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.hero__action--brand {
+  border-color: transparent;
+  color: #ffffff;
+  background: var(--accent);
+}
+
+.hero__action--brand:hover {
+  color: #ffffff;
+  filter: brightness(1.1);
+}
+
+/* `.feature-grid` is the loop container: `:loop` repeats its children, so
+   the element carrying `:loop` is emitted once and the cards inside it are
+   what repeat. It is a grid so the cards lay themselves out. */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 48px;
+}
+
+.feature {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-soft);
+}
+
+.feature__title {
+  margin: 0 0 8px;
+  font-size: 17px;
+  border: 0;
+}
+
+.feature__details {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+/* The body of a home page sits below the feature cards and reads as an
+   ordinary document rather than as part of the pitch. */
+.doc--home {
+  margin: 0 auto;
+}
+
+@media (max-width: 640px) {
+  .hero__name {
+    font-size: 34px;
+  }
+
+  .hero__text {
+    font-size: 19px;
   }
 }

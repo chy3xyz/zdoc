@@ -382,13 +382,13 @@ fn setupUnitTests(b: *std.Build, test_step: *std.Build.Step) void {
     });
     test_step.dependOn(&b.addRunArtifact(unit_tests).step);
 
-    // The frontmatter reader is pure Zig with no dependency on the rest of the
-    // codebase either, so it is tested the same way. It is the one component
-    // that can abort an entire build over a single page, so it is worth
-    // testing in isolation.
+    // The frontmatter reader is the one component that can abort an entire
+    // build over a single page, so it is worth testing directly. Its module is
+    // rooted at `src/` rather than at the file, because the reader reaches into
+    // the context module for the template value types.
     const frontmatter_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/docs/frontmatter.zig"),
+            .root_source_file = b.path("src/frontmatter_test.zig"),
             .target = b.graph.host,
             .optimize = .Debug,
         }),

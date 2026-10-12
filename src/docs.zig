@@ -39,9 +39,14 @@ pub const default_layout = "doc.shtml";
 /// whether they came from the binary or from the user.
 const theme_layout_files = [_]struct { path: []const u8, src: []const u8 }{
     .{ .path = "doc.shtml", .src = @embedFile("docs/theme/layouts/doc.shtml") },
+    .{ .path = "home.shtml", .src = @embedFile("docs/theme/layouts/home.shtml") },
     .{
         .path = "templates/base.shtml",
         .src = @embedFile("docs/theme/layouts/templates/base.shtml"),
+    },
+    .{
+        .path = "templates/base_bare.shtml",
+        .src = @embedFile("docs/theme/layouts/templates/base_bare.shtml"),
     },
 };
 
@@ -562,6 +567,19 @@ pub const scan = struct {
         return null;
     }
 };
+
+/// Resolves a frontmatter `layout` value to the file name Zine looks up.
+///
+/// Documentation is written against other tools, where `layout: home` is the
+/// spelling and the extension is implicit. Zine stores layouts as files
+/// alongside other templates, so it needs `home.shtml` to find one. Accepting
+/// the bare name means an existing frontmatter keeps working as written,
+/// which is the whole point of docs mode.
+pub fn layoutName(gpa: std.mem.Allocator, ref: []const u8) std.mem.Allocator.Error![]const u8 {
+    if (ref.len == 0) return ref;
+    if (std.mem.endsWith(u8, ref, ".shtml") or std.mem.endsWith(u8, ref, ".xml")) return ref;
+    return std.fmt.allocPrint(gpa, "{s}.shtml", .{ref});
+}
 
 /// What a page's title should be when the file has no frontmatter.
 pub fn titleFromHeadings(
