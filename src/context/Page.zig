@@ -2438,18 +2438,7 @@ pub const Builtins = struct {
             // Formatting the date here rather than in the template is not a
             // shortcut: the template language has no date formatter and no way
             // to do arithmetic on a number.
-            const civil = docs.GitDates.civilFromDays(
-                @divFloor(date.unix, std.time.s_per_day),
-            );
-            // The year is formatted as unsigned because Zig's signed integer
-            // formatting prefixes a `+` for non-negative values, which would
-            // render as `+2026-10-12`.
-            const text = std.fmt.allocPrint(
-                gpa,
-                "{d:0>4}-{d:0>2}-{d:0>2}",
-                .{ @as(u32, @intCast(civil.year)), civil.month, civil.day },
-            ) catch return error.OutOfMemory;
-            return String.init(text);
+            return String.init(try docs.GitDates.formatDay(gpa, date));
         }
     };
 

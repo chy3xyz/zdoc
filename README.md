@@ -57,6 +57,10 @@ treats those as ordinary rather than as errors:
   warnings and emitted exactly as written, instead of failing the build.
 - **Real-world Markdown.** Skipped heading levels, raw HTML, reference-style
   links, task lists and Mermaid diagrams all render.
+- **Dates from your history.** Each page shows when it was last committed, and
+  the generated `sitemap.xml` carries the same date as `<lastmod>`, so a crawler
+  knows what changed without refetching. Content that is not in a git
+  repository simply has no date — the build is unaffected.
 
 ## For AI agents
 

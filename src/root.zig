@@ -1097,13 +1097,17 @@ pub fn run(
         // shared map would have their paths collide.
         const dates = try gpa.alloc(docs.GitDates.Dates, build.variants.len);
         for (build.variants, 0..) |*v, i| {
-            dates[i] = docs.GitDates.read(
-                gpa,
-                io,
+            // Resolved against the base directory because `zdoc docs docs` is
+            // run from the repository root but the content path is relative
+            // to it, and `zdoc docs ~/elsewhere/docs` carries an absolute one.
+            // git has to run inside the content tree itself: run from the
+            // base, a build launched from an unrelated directory is not in a
+            // repository at all and every page silently loses its date.
+            const content_path = std.fs.path.resolve(
                 git_arena,
-                options.base_dir_path,
-                v.content_dir_path,
+                &.{ options.base_dir_path, v.content_dir_path },
             ) catch fatal.oom();
+            dates[i] = docs.GitDates.read(gpa, io, git_arena, content_path) catch fatal.oom();
         }
         build.docs_git_dates = dates;
         _ = &git_arena_state;
@@ -2000,8 +2004,15 @@ pub fn run(
             for (build.variants, 0..) |*v, i| ptrs[i] = v;
 
             var sitemap_aw: std.Io.Writer.Allocating = .init(arena);
-            docs.Sitemap.write(&sitemap_aw.writer, ptrs, simple_url_prefix) catch |err| switch (err) {
+            docs.Sitemap.write(
+                arena,
+                &sitemap_aw.writer,
+                ptrs,
+                simple_url_prefix,
+                build.docs_git_dates,
+            ) catch |err| switch (err) {
                 error.WriteFailed => {},
+                error.OutOfMemory => fatal.oom(),
             };
             out_dir.writeFile(io, .{
                 .sub_path = docs.Sitemap.file_name,

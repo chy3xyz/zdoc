@@ -41,14 +41,16 @@ pub const Dates = struct {
 /// is not installed, or when the history is empty. A missing date is never an
 /// error: the caller simply does not print one.
 ///
-/// `repo_dir` is the directory to run git in, which for a docs site is
-/// wherever the content lives -- that is the repository the author committed
-/// from.
+/// `content_dir_path` is the directory to run git in, resolved to an absolute
+/// path. It has to be the content tree itself rather than the process's
+/// working directory: `zdoc docs ~/projects/app/docs` is normally run from
+/// anywhere, and a git run from an unrelated directory is not in a repository
+/// at all. Running there with `--relative` also makes the paths come back
+/// relative to the content directory, which is the form the caller asks about.
 pub fn read(
     gpa: Allocator,
     io: Io,
     arena: Allocator,
-    repo_dir: []const u8,
     content_dir_path: []const u8,
 ) Allocator.Error!Dates {
     var dates: Dates = .{};
@@ -63,17 +65,16 @@ pub fn read(
         "--pretty=format:zxdoc-commit %cI",
         "--name-only",
         "--no-renames",
+        // Confine the walk to the current directory and report paths relative
+        // to it. A repository's whole history is not interesting, and
+        // limiting it keeps the output small on a large project.
+        "--relative",
         "HEAD",
-        // Confine the walk to the content directory: a repository's whole
-        // history is not interesting, and limiting it keeps the output small
-        // on a large project.
-        "--",
-        content_dir_path,
     };
 
     const result = std.process.run(gpa, io, .{
         .argv = &argv,
-        .cwd = .{ .path = repo_dir },
+        .cwd = .{ .path = content_dir_path },
         // A docs tree's history can be large; cap it so a pathological
         // repository cannot exhaust memory here.
         .stdout_limit = .limited(64 * 1024 * 1024),
@@ -89,7 +90,9 @@ pub fn read(
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    try parse(gpa, arena, result.stdout, content_dir_path, &dates);
+    // `--relative` already stripped the content directory from every path, so
+    // there is no prefix left to remove.
+    try parse(gpa, arena, result.stdout, &dates);
     return dates;
 }
 
@@ -102,15 +105,9 @@ fn parse(
     gpa: Allocator,
     arena: Allocator,
     output: []const u8,
-    content_dir_path: []const u8,
     dates: *Dates,
 ) Allocator.Error!void {
     const header_prefix = "zxdoc-commit ";
-
-    // A path is only interesting if it is under the content directory; the
-    // caller wants dates for pages, not for the repository's source tree.
-    const content_prefix = if (content_dir_path.len == 0 or
-        std.mem.eql(u8, content_dir_path, ".")) "" else content_dir_path;
 
     var current: ?Date = null;
     var lines = std.mem.splitScalar(u8, output, '\n');
@@ -126,19 +123,9 @@ fn parse(
         }
         const date = current orelse continue;
 
-        // `--name-only` output is relative to the repository root, while the
-        // caller asks about paths relative to the content directory.
-        var path = raw;
-        if (content_prefix.len != 0) {
-            if (!std.mem.startsWith(u8, path, content_prefix)) continue;
-            path = path[content_prefix.len..];
-            while (path.len > 0 and (path[0] == '/' or path[0] == '\\')) path = path[1..];
-            if (path.len == 0) continue;
-        }
-
         // First date wins: git log is newest-first, so this is the latest.
-        if (dates.entries.contains(path)) continue;
-        try dates.entries.put(gpa, try arena.dupe(u8, path), date);
+        if (dates.entries.contains(raw)) continue;
+        try dates.entries.put(gpa, try arena.dupe(u8, raw), date);
     }
 }
 
@@ -201,6 +188,29 @@ pub fn civilFromDays(z: i64) Civil {
     return .{ .year = @intCast(y + @intFromBool(month <= 2)), .month = month, .day = day };
 }
 
+/// Formats a date as `YYYY-MM-DD` into `buf`, returning the written slice.
+///
+/// Both consumers want the same string -- the "Last updated" line in the page
+/// footer and the sitemap's `<lastmod>` -- and the W3C datetime format accepts
+/// a bare calendar day, so there is one rendering rather than two.
+///
+/// The year is formatted as unsigned because Zig's signed integer formatting
+/// prefixes a `+` for non-negative values, which would render as `+2026-10-12`.
+pub fn isoDay(buf: *[10]u8, date: Date) []const u8 {
+    const civil = civilFromDays(@divFloor(date.unix, std.time.s_per_day));
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{
+        @as(u32, @intCast(civil.year)),
+        civil.month,
+        civil.day,
+    }) catch unreachable;
+}
+
+/// `isoDay`, on the heap.
+pub fn formatDay(gpa: Allocator, date: Date) Allocator.Error![]const u8 {
+    var buf: [10]u8 = undefined;
+    return gpa.dupe(u8, isoDay(&buf, date));
+}
+
 const testing = std.testing;
 
 test "parseDate keeps the calendar day" {
@@ -250,15 +260,15 @@ test "parse keeps the newest date for each path" {
     // recent one. QUICK-START is only in that commit; README is in both.
     const output =
         "zxdoc-commit 2026-10-11\n" ++
-        "docs/README.md\n" ++
-        "docs/guide/QUICK-START.md\n" ++
+        "README.md\n" ++
+        "guide/QUICK-START.md\n" ++
         "\n" ++
         "zxdoc-commit 2026-01-02\n" ++
-        "docs/README.md\n" ++
-        "docs/other.md\n" ++
+        "README.md\n" ++
+        "other.md\n" ++
         "\n";
 
-    try parse(gpa, arena_state.allocator(), output, "docs", &dates);
+    try parse(gpa, arena_state.allocator(), output, &dates);
 
     const readme = dates.get("README.md").?;
     const quickstart = dates.get("guide/QUICK-START.md").?;
@@ -279,23 +289,56 @@ test "parse keeps the newest date for each path" {
     try testing.expectEqual(@as(usize, 3), dates.entries.count());
 }
 
-test "parse ignores paths outside the content directory" {
+test "parse reads the paths git reports relative to the content directory" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
 
     var dates: Dates = .{};
     defer dates.deinit(testing.allocator);
 
+    // `git log --relative` run inside the content directory reports paths
+    // with no content-directory prefix, which is exactly what
+    // `Page.sourcePath` produces. A build that confuses the two looks up
+    // every page under a name that is not in the map, which is a silent miss
+    // rather than a visible failure.
     const output =
         "zxdoc-commit 2026-10-11\n" ++
-        "src/main.zig\n" ++
-        "docs/README.md\n" ++
+        "README.md\n" ++
+        "ai/AI.md\n" ++
         "\n";
 
-    try parse(testing.allocator, arena_state.allocator(), output, "docs", &dates);
+    try parse(testing.allocator, arena_state.allocator(), output, &dates);
+
+    try testing.expectEqual(@as(usize, 2), dates.entries.count());
+    try testing.expect(dates.get("README.md") != null);
+    try testing.expect(dates.get("ai/AI.md") != null);
+}
+
+test "parse skips a commit header with no paths after it" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    var dates: Dates = .{};
+    defer dates.deinit(testing.allocator);
+
+    // `--relative` drops the paths of a commit that touched nothing inside
+    // the content directory, leaving a bare header. The following commit's
+    // paths must not inherit its date, which is what resetting on the blank
+    // line is for.
+    const output =
+        "zxdoc-commit 2026-10-11\n" ++
+        "\n" ++
+        "zxdoc-commit 2026-01-02\n" ++
+        "README.md\n" ++
+        "\n";
+
+    try parse(testing.allocator, arena_state.allocator(), output, &dates);
 
     try testing.expectEqual(@as(usize, 1), dates.entries.count());
-    try testing.expect(dates.get("README.md") != null);
+    try testing.expectEqual(
+        parseDate("2026-01-02").?.unix,
+        dates.get("README.md").?.unix,
+    );
 }
 test "civilFromDays is the inverse of daysFromCivil" {
     const cases = [_]struct { y: i32, m: u8, d: u8 }{
@@ -311,4 +354,32 @@ test "civilFromDays is the inverse of daysFromCivil" {
         try testing.expectEqual(c.m, back.month);
         try testing.expectEqual(c.d, back.day);
     }
+}
+
+test "isoDay renders the date both consumers print" {
+    const cases = [_]struct { y: i32, m: u8, d: u8, text: []const u8 }{
+        .{ .y = 1970, .m = 1, .d = 1, .text = "1970-01-01" },
+        // Single-digit fields are zero-padded: an unpadded `2026-1-2` is not
+        // the date format either consumer's readers expect.
+        .{ .y = 2026, .m = 1, .d = 2, .text = "2026-01-02" },
+        .{ .y = 2000, .m = 2, .d = 29, .text = "2000-02-29" },
+        .{ .y = 2026, .m = 10, .d = 12, .text = "2026-10-12" },
+    };
+    for (cases) |c| {
+        var buf: [10]u8 = undefined;
+        const date: Date = .{ .unix = daysFromCivil(c.y, c.m, c.d) * std.time.s_per_day };
+        try testing.expectEqualStrings(c.text, isoDay(&buf, date));
+
+        const owned = try formatDay(testing.allocator, date);
+        defer testing.allocator.free(owned);
+        try testing.expectEqualStrings(c.text, owned);
+    }
+}
+
+test "isoDay does not prefix a plus onto the year" {
+    // Zig's signed integer formatting writes `+2026`, which would render the
+    // date as `+2026-10-12` and be rejected by a sitemap reader.
+    var buf: [10]u8 = undefined;
+    const text = isoDay(&buf, .{ .unix = daysFromCivil(2026, 10, 12) * std.time.s_per_day });
+    try testing.expect(text[0] >= '0' and text[0] <= '9');
 }
