@@ -82,6 +82,7 @@ pub const DocsOptions = struct {
         var base_dir_path: ?[]const u8 = null;
         var title: ?[]const u8 = null;
         var mermaid: ?[]const u8 = null;
+        var url_path_prefix: ?[]const u8 = null;
         var output_dir_path: ?[]const u8 = null;
         const build_assets: std.StringArrayHashMapUnmanaged(BuildAsset) = .empty;
         var drafts = false;
@@ -123,6 +124,12 @@ pub const DocsOptions = struct {
                 mermaid = args[idx];
             } else if (startsWith(u8, arg, "--mermaid=")) {
                 mermaid = arg["--mermaid=".len..];
+            } else if (eql(u8, arg, "--url-prefix")) {
+                idx += 1;
+                if (idx >= args.len) fatal.msg("error: missing argument to '{s}'", .{arg});
+                url_path_prefix = args[idx];
+            } else if (startsWith(u8, arg, "--url-prefix=")) {
+                url_path_prefix = arg["--url-prefix=".len..];
             } else if (eql(u8, arg, "--drafts")) {
                 drafts = true;
             } else if (startsWith(u8, arg, "-")) {
@@ -159,6 +166,12 @@ pub const DocsOptions = struct {
 
         const site_title = title orelse deriveTitle(gpa, content);
 
+        // Normalize here rather than in `root.Config.validate`, because that
+        // validation is shared with blog mode and rejects a leading slash
+        // outright. Authors write `--url-prefix /docs/` far more often than
+        // `--url-prefix docs`, and both have to mean the same thing.
+        const prefix = if (url_path_prefix) |raw| try normalizeUrlPrefix(gpa, raw) else null;
+
         // Docs mode overrides the layout and asset directories with the
         // built-in theme, so the values here are placeholders that satisfy
         // deserialization without ever being read.
@@ -168,6 +181,7 @@ pub const DocsOptions = struct {
             .site = .{ .simple = .{
                 .title = site_title,
                 .host_url = "http://localhost/",
+                .url_path_prefix = prefix,
                 .layouts_dir_path = docs.theme_layouts_path,
                 .content_dir_path = content,
                 .assets_dir_path = docs.theme_assets_path,
@@ -221,6 +235,26 @@ fn deriveTitle(gpa: Allocator, content_dir_path: []const u8) []const u8 {
     return buf[0..len];
 }
 
+/// Trims the slashes an author is likely to wrap a URL prefix in.
+///
+/// The prefix is joined into hrefs as `/{prefix}/`, so a leading or trailing
+/// slash would produce `//docs//`. Rejecting those forms would be worse than
+/// accepting them: `--url-prefix /docs/` is the natural thing to type.
+fn normalizeUrlPrefix(
+    gpa: Allocator,
+    raw: []const u8,
+) error{OutOfMemory}![]const u8 {
+    const trimmed = std.mem.trim(u8, raw, "/");
+    if (trimmed.len == 0) return fatal.msg(
+        \\error: --url-prefix cannot be empty
+        \\
+        \\Pass a subpath like 'docs' if the site is served from
+        \\a subdirectory of its host.
+        \\
+    , .{});
+    return gpa.dupe(u8, trimmed);
+}
+
 const help_message =
     \\Usage: zdoc docs <dir> [OPTIONS]
     \\
@@ -239,6 +273,9 @@ const help_message =
     \\                      (defaults to 'public/')
     \\  --mermaid FILE       Vendored mermaid ESM bundle, for rendering
     \\                      diagrams without network access
+    \\  --url-prefix PATH  Serve the site from a subdirectory, for
+    \\                      example when publishing to
+    \\                      https://example.com/repo/docs/
     \\  --force, -f         Ignore other files in the output directory
     \\  --help, -h          Show this help menu
     \\
