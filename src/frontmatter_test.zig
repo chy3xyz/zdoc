@@ -8,4 +8,6 @@
 test {
     _ = @import("docs/frontmatter.zig");
     _ = @import("docs/GitDates.zig");
+    _ = @import("docs/Search.zig");
+    _ = @import("docs/Sitemap.zig");
 }

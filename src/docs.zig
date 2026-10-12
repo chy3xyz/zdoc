@@ -23,6 +23,10 @@ pub const Sidebar = @import("docs/Sidebar.zig");
 pub const frontmatter = @import("docs/frontmatter.zig");
 /// Per-page last-modified dates read from git history.
 pub const GitDates = @import("docs/GitDates.zig");
+/// Search index generation.
+pub const Search = @import("docs/Search.zig");
+/// `sitemap.xml` generation.
+pub const Sitemap = @import("docs/Sitemap.zig");
 const Variant = @import("Variant.zig");
 const StringTable = @import("StringTable.zig");
 const PathTable = @import("PathTable.zig");
@@ -55,6 +59,10 @@ const theme_layout_files = [_]struct { path: []const u8, src: []const u8 }{
 const theme_asset_files = [_]struct { path: []const u8, src: []const u8 }{
     .{ .path = "zdoc.css", .src = @embedFile("docs/theme/assets/zdoc.css") },
     .{ .path = "zdoc.js", .src = @embedFile("docs/theme/assets/zdoc.js") },
+    // A static host serves this for any URL it cannot find. Generating it
+    // rather than asking the author to write one keeps it in step with the
+    // theme, which is the whole reason to generate it at all.
+    .{ .path = "404.html", .src = @embedFile("docs/theme/assets/404.html") },
 };
 
 /// Directory the built-in theme is materialized into, relative to the base

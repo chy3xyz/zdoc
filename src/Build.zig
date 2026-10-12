@@ -59,9 +59,12 @@ layouts_dir: Io.Dir,
 templates: Templates = .{},
 site_assets_dir: Io.Dir,
 site_assets: Assets = .empty,
-/// Set when a vendored mermaid bundle must be installed unconditionally.
-/// Site assets are otherwise only copied when a template references them.
-install_mermaid_bundle: bool = false,
+/// Site assets that must be installed even though no template references
+/// them. A site asset is otherwise only copied when something links it, which
+/// is the right rule for a stylesheet and the wrong one for a file nothing
+/// links because it is fetched by name at runtime -- a vendored mermaid
+/// bundle, a search index, a 404 page.
+docs_always_install: std.StringHashMapUnmanaged(void) = .empty,
 i18n_dir: Io.Dir,
 // Translation key map. Each entry is a slice with the same length as the
 // number of variants.

@@ -19,6 +19,7 @@ const PathTable = @import("../PathTable.zig");
 const PathName = PathTable.PathName;
 const root = @import("../root.zig");
 const join = root.join;
+const docs = @import("../docs.zig");
 const Signature = @import("doctypes.zig").Signature;
 
 host_url: []const u8,
@@ -342,6 +343,38 @@ pub const Builtins = struct {
             }
 
             return .{ .page = &variant.pages.items[hint.id] };
+        }
+    };
+
+    /// Where `zdoc.js` fetches the search index from.
+    pub const searchIndex = struct {
+        pub const signature: Signature = .{ .ret = .String };
+
+        pub const docs_description =
+            \\Documentation mode: the URL of the generated search index.
+            \\
+            \\Already carries the site's URL prefix, so it is correct
+            \\whenever the site is served from a subdirectory.
+        ;
+
+        pub const examples =
+            \\`<meta name="zdoc-search-index" content="$site.searchIndex()">`
+        ;
+
+        pub fn call(
+            s: *const Site,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            _ = s;
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+
+            var aw: Writer.Allocating = .init(gpa);
+            ctx.printLinkPrefix(&aw.writer, ctx.site._meta.variant_id, false) catch
+                return error.OutOfMemory;
+            aw.writer.writeAll(docs.Search.file_name) catch return error.OutOfMemory;
+            return String.init(aw.written());
         }
     };
 

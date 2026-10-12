@@ -720,12 +720,14 @@ pub fn run(
             log.debug("[{s}] -> {}-{} ({})", .{ k, v.start, v.end, v.last_for });
         }
 
-        // The vendored mermaid bundle has no template to reference it, so it
-        // would never reach the output: site assets are only copied when
-        // something links them. Flag it so the installer copies it anyway,
-        // which is what makes the offline path work.
-        build.install_mermaid_bundle = build.cfg.isDocs() and
-            build.cfg.getMermaidPath() != null;
+        // These files are loaded by name at runtime rather than linked from a
+        // template, so nothing would ever mark them for installation.
+        if (build.cfg.isDocs() and build.cfg.getMermaidPath() != null) {
+            try build.docs_always_install.put(gpa, docs.mermaid_bundle_name, {});
+        }
+        if (build.cfg.isDocs()) {
+            try build.docs_always_install.put(gpa, "404.html", {});
+        }
 
         for (build.cfg.getStaticAssets()) |path| {
             if (std.fs.path.isAbsolute(path)) {
@@ -1917,6 +1919,34 @@ pub fn run(
         for (build.variants) |*v| {
             v.sidebar = docs.Sidebar.build(arena, v) catch fatal.oom();
         }
+
+        // Written here rather than by the template pipeline because both
+        // files span every page, and no single page's layout can express
+        // that. They are generated after every page is parsed so the set of
+        // pages is final.
+        if (build.mode == .disk and build.variants.len == 1) {
+            const out_dir = build.mode.disk.output_dir;
+
+            var sitemap_aw: std.Io.Writer.Allocating = .init(arena);
+            docs.Sitemap.write(&sitemap_aw.writer, &build.variants[0]) catch |err| switch (err) {
+                error.WriteFailed => {},
+            };
+            out_dir.writeFile(io, .{
+                .sub_path = docs.Sitemap.file_name,
+                .data = sitemap_aw.written(),
+            }) catch |e| fatal.file(docs.Sitemap.file_name, e);
+
+            const url_prefix = switch (cfg.site) {
+                .simple => |s| s.url_path_prefix orelse "",
+                .multilingual => "",
+            };
+            const index = docs.Search.build(arena, &build.variants[0], url_prefix) catch
+                fatal.oom();
+            out_dir.writeFile(io, .{
+                .sub_path = docs.Search.file_name,
+                .data = index,
+            }) catch |e| fatal.file(docs.Search.file_name, e);
+        }
     }
 
     var pages_to_render: usize = 0;
@@ -2027,8 +2057,7 @@ pub fn run(
                 ),
             }) catch unreachable;
 
-            const always = build.install_mermaid_bundle and
-                std.mem.eql(u8, path, docs.mermaid_bundle_name);
+            const always = build.docs_always_install.contains(path);
 
             if (entry.value_ptr.raw > 0 or always) {
                 _ = build.site_assets_dir.updateFile(

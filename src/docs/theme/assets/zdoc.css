@@ -662,3 +662,86 @@ pre.mermaid svg {
   color: var(--text-dim);
   font-size: 14px;
 }
+
+/* ------------------------------------------------------------------ search
+ *
+ * The input sits above the sidebar list. Results are absolutely positioned
+ * over the sidebar rather than pushed into the document flow, so opening the
+ * list does not reflow the page under the reader's cursor.
+ */
+
+.search {
+  position: relative;
+  margin: 12px 16px 16px;
+}
+
+.search__input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.search__input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.search__results {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.search__results[hidden] {
+  display: none;
+}
+
+.search__result {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 4px;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.search__result:hover,
+.search__result:focus {
+  background: var(--accent-soft);
+}
+
+.search__result-title {
+  display: block;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.search__result-page {
+  display: block;
+  color: var(--text-dim);
+  font-size: 12px;
+  /* A long page title should not push the result list sideways. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search__empty {
+  padding: 7px 10px;
+  color: var(--text-dim);
+  font-size: 14px;
+}

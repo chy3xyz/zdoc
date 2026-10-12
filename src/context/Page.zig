@@ -2316,6 +2316,31 @@ pub const Builtins = struct {
         }
     };
 
+    /// Whether this page has a description to share.
+    ///
+    /// `:if` takes a bool and `description` is a string, so a template cannot
+    /// ask whether it is non-empty. Most pages in a documentation tree have no
+    /// description at all, which makes this worth exposing rather than
+    /// rendering an empty sharing card on every page.
+    pub const hasDescription = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\True when the page has a description set in its frontmatter.
+        ;
+        pub const examples =
+            \\`<meta property="og:description" :text="$page.description">`
+        ;
+        pub fn call(
+            p: *const Page,
+            _: Allocator,
+            _: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return Bool.init(p.description.len != 0);
+        }
+    };
+
     /// Whether this page has a known last-modified date.
     ///
     /// `:if` takes a bool, so the template cannot ask whether a date string is
