@@ -386,17 +386,22 @@ pub fn html(
                                     error.OutOfMemory,
                                     error.WriteFailed,
                                     => |e| return e,
-                                    // Normally unreachable, because the
-                                    // language was validated during analysis.
-                                    // In docs mode that check is a warning
-                                    // rather than an error, so an unsupported
-                                    // language can reach this point. Fall back
-                                    // to emitting the code unhighlighted rather
-                                    // than crashing the build: documentation
-                                    // uses languages the highlighter may not
-                                    // know, and losing colours is a much better
-                                    // outcome than losing the page.
-                                    error.NoLanguage, error.Unknown => {},
+                                    // No grammar is behind this language, so
+                                    // there is nothing to highlight with.
+                                    // `highlight.run` returns before writing
+                                    // anything in that case, so emitting the
+                                    // source here cannot duplicate it.
+                                    //
+                                    // Emitting the code unhighlighted is what
+                                    // every other Markdown renderer does, and
+                                    // it is the difference between a document
+                                    // rendered without colours and a document
+                                    // with holes in it. This handler used to
+                                    // discard the block, so a ```text fence
+                                    // lost its contents entirely.
+                                    error.NoLanguage, error.Unknown => {
+                                        try w.print("{f}", .{HtmlSafe{ .bytes = code }});
+                                    },
                                 };
                             }
 

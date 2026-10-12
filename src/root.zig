@@ -1392,6 +1392,29 @@ pub fn run(
 
             for (p._analysis.link_warnings.items) |err| {
                 link_warning_count += 1;
+
+                // Name the language in an unknown-language warning. The
+                // block still renders -- it falls back to unhighlighted text
+                // -- so this is the only signal the author gets that their
+                // ```nosuchlang fence has no grammar behind it, and a warning
+                // that does not say which one is not actionable.
+                if (err.kind == .unknown_language) {
+                    std.debug.print(
+                        "{f}: warning: unknown language code '{s}'," ++
+                            " rendered as plain text\n",
+                        .{
+                            p._scan.file.fmt(
+                                &v.string_table,
+                                &v.path_table,
+                                v.content_dir_path,
+                                "",
+                            ),
+                            err.kind.unknown_language.lang,
+                        },
+                    );
+                    continue;
+                }
+
                 std.debug.print(
                     "{f}: warning: {s}\n",
                     .{
