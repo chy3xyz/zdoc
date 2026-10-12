@@ -109,11 +109,19 @@ fn mermaidLoaderSrc(gpa: std.mem.Allocator, local: bool) ![]const u8 {
 /// the theme's asset directory. That way it is installed by the existing
 /// asset pipeline — a site asset is copied to the output only when something
 /// links it, and the generated loader does exactly that.
+///
+/// `override_dir` customizes the theme file by file. A file present there is
+/// used instead of the built-in one, and a file absent falls back to the
+/// built-in, so overriding `zdoc.css` does not require copying the layouts
+/// too. Everything still lands in `.zdoc-theme/`, which is what keeps a single
+/// code path through the scanners and the renderer.
 pub fn installTheme(
     io: Io,
     gpa: std.mem.Allocator,
     base_dir_path: []const u8,
     mermaid_local: ?[]const u8,
+    override_dir: ?[]const u8,
+    keep_existing: bool,
 ) !void {
     var base = Io.Dir.cwd().openDir(io, base_dir_path, .{}) catch |err| return err;
     defer base.close(io);
@@ -132,10 +140,32 @@ pub fn installTheme(
     ) catch |err| return err;
     defer assets.close(io);
 
+    var overrides: ?Overrides = null;
+    if (override_dir) |dir_path| {
+        overrides = Overrides.open(io, base, dir_path) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => null,
+            else => return err,
+        };
+    }
+
     for (theme_layout_files) |f| {
+        if (overrides) |o| {
+            if (o.read(io, f.path)) |src| {
+                writeFile(io, layouts, f.path, src) catch |err| return err;
+                continue;
+            } else |_| {}
+        }
+        if (keep_existing and exists(io, layouts, f.path)) continue;
         writeFile(io, layouts, f.path, f.src) catch |err| return err;
     }
     for (theme_asset_files) |f| {
+        if (overrides) |o| {
+            if (o.read(io, f.path)) |src| {
+                writeFile(io, assets, f.path, src) catch |err| return err;
+                continue;
+            } else |_| {}
+        }
+        if (keep_existing and exists(io, assets, f.path)) continue;
         writeFile(io, assets, f.path, f.src) catch |err| return err;
     }
 
@@ -147,6 +177,33 @@ pub fn installTheme(
     const loader = try mermaidLoaderSrc(gpa, vendored);
     writeFile(io, assets, mermaid_loader_name, loader) catch |err| return err;
 }
+
+/// A directory of user-supplied replacements for theme files.
+const Overrides = struct {
+    dir: Io.Dir,
+
+    fn open(io: Io, base: Io.Dir, dir_path: []const u8) !Overrides {
+        return .{ .dir = try base.openDir(io, dir_path, .{}) };
+    }
+
+    /// Reads an override for `name`, or returns `error.FileNotFound` when the
+    /// user did not supply one and the built-in should be used.
+    ///
+    /// The distinction matters: a theme file that exists but is empty is the
+    /// author overriding it with nothing, which is their call to make.
+    fn read(self: Overrides, io: Io, name: []const u8) ![]const u8 {
+        return self.dir.readFileAllocOptions(
+            io,
+            name,
+            std.heap.page_allocator,
+            .limited(max_override_bytes),
+            .of(u8),
+            0,
+        );
+    }
+};
+
+const max_override_bytes: usize = 16 * 1024 * 1024;
 
 /// Copies `src_path` (relative to `base`) to `dest_name` inside `dest`.
 /// Returns false when the source does not exist, which is how a site without a
@@ -179,6 +236,12 @@ fn copyFile(
 }
 
 const max_vendored_bytes: usize = 16 * 1024 * 1024;
+
+/// Whether `name` already exists in `dir`, for the keep-existing theme mode.
+fn exists(io: Io, dir: Io.Dir, name: []const u8) bool {
+    dir.access(io, name, .{}) catch return false;
+    return true;
+}
 
 fn writeFile(io: Io, dir: Io.Dir, name: []const u8, src: []const u8) !void {
     // `writeFile` will not create parent directories, and the layouts include

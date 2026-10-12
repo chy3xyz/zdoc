@@ -35,6 +35,8 @@ pub fn docsCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
                 .output_dir_path = cmd.output_dir_path,
             },
         },
+        .theme_dir = cmd.theme_dir,
+        .theme_keep_existing = cmd.theme_keep_existing,
     }) catch fatal.oom();
 
     defer if (builtin.mode == .debug) build.deinit(io, gpa);
@@ -71,6 +73,8 @@ pub const DocsOptions = struct {
     build_assets: std.StringArrayHashMapUnmanaged(BuildAsset),
     drafts: bool,
     force: bool,
+    theme_dir: ?[]const u8,
+    theme_keep_existing: bool,
 
     pub fn deinit(co: *const DocsOptions, gpa: Allocator) void {
         var ba = co.build_assets;
@@ -83,6 +87,8 @@ pub const DocsOptions = struct {
         var title: ?[]const u8 = null;
         var mermaid: ?[]const u8 = null;
         var url_path_prefix: ?[]const u8 = null;
+        var theme_dir: ?[]const u8 = null;
+        var theme_keep_existing = false;
         var output_dir_path: ?[]const u8 = null;
         const build_assets: std.StringArrayHashMapUnmanaged(BuildAsset) = .empty;
         var drafts = false;
@@ -130,6 +136,14 @@ pub const DocsOptions = struct {
                 url_path_prefix = args[idx];
             } else if (startsWith(u8, arg, "--url-prefix=")) {
                 url_path_prefix = arg["--url-prefix=".len..];
+            } else if (eql(u8, arg, "--theme-dir")) {
+                idx += 1;
+                if (idx >= args.len) fatal.msg("error: missing argument to '{s}'", .{arg});
+                theme_dir = args[idx];
+            } else if (startsWith(u8, arg, "--theme-dir=")) {
+                theme_dir = arg["--theme-dir=".len..];
+            } else if (eql(u8, arg, "--keep-theme")) {
+                theme_keep_existing = true;
             } else if (eql(u8, arg, "--drafts")) {
                 drafts = true;
             } else if (startsWith(u8, arg, "-")) {
@@ -196,6 +210,8 @@ pub const DocsOptions = struct {
             .build_assets = build_assets,
             .drafts = drafts,
             .force = force,
+            .theme_dir = theme_dir,
+            .theme_keep_existing = theme_keep_existing,
         };
     }
 };
@@ -276,6 +292,12 @@ const help_message =
     \\  --url-prefix PATH  Serve the site from a subdirectory, for
     \\                      example when publishing to
     \\                      https://example.com/repo/docs/
+    \\  --theme-dir DIR    Use theme files from DIR where present, and the
+    \\                      built-in theme for the rest. Override a single
+    \\                      stylesheet or layout without copying the rest.
+    \\  --keep-theme        Do not overwrite theme files that already exist
+    \\                      in '.zdoc-theme/', so local edits survive a
+    \\                      rebuild
     \\  --force, -f         Ignore other files in the output directory
     \\  --help, -h          Show this help menu
     \\

@@ -590,6 +590,12 @@ pub const Options = struct {
     base_dir_path: []const u8,
     mode: Mode,
     drafts: bool,
+    /// Docs mode only: a directory of theme files that replace the built-in
+    /// ones file by file. Null uses the built-in theme unchanged.
+    theme_dir: ?[]const u8 = null,
+    /// Docs mode only: keep theme files that already exist on disk instead of
+    /// overwriting them, so a hand-edited `.zdoc-theme/` survives a rebuild.
+    theme_keep_existing: bool = false,
 
     pub const Mode = union(enum) {
         memory,
@@ -618,10 +624,14 @@ pub fn run(
     // build is loaded so that the ordinary template and asset scanners pick
     // it up, leaving rendering with a single code path.
     if (cfg.isDocs()) {
-        docs.installTheme(io, gpa, options.base_dir_path, cfg.getMermaidPath()) catch |e| fatal.dir(
-            "built-in theme",
-            e,
-        );
+        docs.installTheme(
+            io,
+            gpa,
+            options.base_dir_path,
+            cfg.getMermaidPath(),
+            options.theme_dir,
+            options.theme_keep_existing,
+        ) catch |e| fatal.dir("built-in theme", e);
     }
 
     var build: Build = blk: {
