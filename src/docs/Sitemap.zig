@@ -27,9 +27,15 @@ const Page = context.Page;
 pub const file_name = "sitemap.xml";
 
 /// Renders the sitemap for one variant into `writer`.
+///
+/// `url_prefix` must be the same value the site's links are built with, so
+/// that a `<loc>` and the href it is meant to describe agree. A sitemap that
+/// lists `/api/` for a page served at `/docs/api/` is worse than no sitemap:
+/// it tells a crawler the canonical URL is one that 404s.
 pub fn write(
     writer: *Io.Writer,
     v: *const Variant,
+    url_prefix: []const u8,
 ) Io.Writer.Error!void {
     try writer.writeAll(
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -46,13 +52,14 @@ pub fn write(
         if (p.hidden) continue;
 
         try writer.writeAll("  <url><loc>/");
-        // `Path.fmt` prints nothing for the root path, which would leave the
-        // homepage with an empty `<loc>` -- the single most important URL in
-        // the file, and the one a reader visits first.
+        // The prefix is appended by the formatter, which adds the separating
+        // slash itself. Without it the root page still prints nothing, which
+        // would leave the homepage -- the single most important URL in the
+        // file -- with an empty `<loc>`.
         try writer.print("{f}", .{p._scan.url.fmt(
             &v.string_table,
             &v.path_table,
-            null,
+            if (url_prefix.len == 0) null else url_prefix,
             true,
         )});
         try writer.writeAll("</loc></url>\n");

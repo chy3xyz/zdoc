@@ -224,6 +224,37 @@ fn ensureDir(
     return dirs.get(path) orelse return error.OutOfMemory;
 }
 
+/// Ordering state for a directory's children.
+///
+/// The comparator needs both the variant (to read names) and the directory map
+/// (to find the index page that carries `order`), and `std.mem.sort` takes a
+/// single context, so they are bundled here.
+const SectionSort = struct {
+    v: *const Variant,
+    dirs: *const std.AutoHashMapUnmanaged(Path, *Dir),
+
+    /// A section's sort position. Sections that set no `order` sort after
+    /// every section that does, so adding one never reshuffles the rest of
+    /// the sidebar into an arbitrary arrangement.
+    fn orderOf(ctx: *const SectionSort, path: Path) i64 {
+        const d = ctx.dirs.get(path) orelse return no_section_order;
+        const index = d.index_page orelse return no_section_order;
+
+        // A page that never set `order` carries the type's sentinel, which is
+        // the *smallest* integer -- so returning it directly would put every
+        // unordered section at the top of the sidebar rather than the bottom.
+        if (index.order == Page.no_order) return no_section_order;
+        return index.order;
+    }
+};
+
+/// Sort position for a section that declares no `order` of its own.
+///
+/// Sections that set an order come first, in the order given; the rest follow
+/// alphabetically. That way setting `order` on one section moves it without
+/// forcing every other section to be numbered too.
+const no_section_order: i64 = std.math.maxInt(i64);
+
 /// The last component of a directory path, which is its display name.
 fn dirName(v: *const Variant, path: Path) []const u8 {
     const components = path.slice(&v.path_table);
@@ -247,9 +278,21 @@ fn flatten(
     // `01-guide/` before `02-api/` -- so the sort has to read it as a number.
     // Byte order would put `10-` before `2-`, which is exactly the outcome the
     // prefix was written to avoid.
-    std.mem.sort(Path, dir.dirs.items, v, struct {
-        fn lessThan(ctx: *const Variant, lhs: Path, rhs: Path) bool {
-            return naturalLess(dirName(ctx, lhs), dirName(ctx, rhs));
+    // A section's position comes from its index page's `order` when it sets
+    // one, and from its name otherwise.
+    //
+    // This is the escape hatch for a site that cannot rename its
+    // directories. The numeric-prefix convention also orders sections, but
+    // adopting it means `guide/` becomes `01-guide/`, which changes the
+    // directory's URL and breaks every link to it. `order` costs nothing that
+    // is already published.
+    const sort_ctx: SectionSort = .{ .v = v, .dirs = dirs };
+    std.mem.sort(Path, dir.dirs.items, &sort_ctx, struct {
+        fn lessThan(ctx: *const SectionSort, lhs: Path, rhs: Path) bool {
+            const l = ctx.orderOf(lhs);
+            const r = ctx.orderOf(rhs);
+            if (l != r) return l < r;
+            return naturalLess(dirName(ctx.v, lhs), dirName(ctx.v, rhs));
         }
     }.lessThan);
 

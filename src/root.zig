@@ -1927,8 +1927,16 @@ pub fn run(
         if (build.mode == .disk and build.variants.len == 1) {
             const out_dir = build.mode.disk.output_dir;
 
+            const url_prefix = switch (cfg.site) {
+                .simple => |s| s.url_path_prefix orelse "",
+                .multilingual => "",
+            };
+
+            // Both files below list page URLs, so both are built with the
+            // site's URL prefix. A sitemap that omits it describes URLs that do
+            // not resolve, which is worse than publishing no sitemap at all.
             var sitemap_aw: std.Io.Writer.Allocating = .init(arena);
-            docs.Sitemap.write(&sitemap_aw.writer, &build.variants[0]) catch |err| switch (err) {
+            docs.Sitemap.write(&sitemap_aw.writer, &build.variants[0], url_prefix) catch |err| switch (err) {
                 error.WriteFailed => {},
             };
             out_dir.writeFile(io, .{
@@ -1936,10 +1944,6 @@ pub fn run(
                 .data = sitemap_aw.written(),
             }) catch |e| fatal.file(docs.Sitemap.file_name, e);
 
-            const url_prefix = switch (cfg.site) {
-                .simple => |s| s.url_path_prefix orelse "",
-                .multilingual => "",
-            };
             const index = docs.Search.build(arena, &build.variants[0], url_prefix) catch
                 fatal.oom();
             out_dir.writeFile(io, .{
