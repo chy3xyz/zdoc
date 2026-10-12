@@ -2391,7 +2391,9 @@ pub const Builtins = struct {
             ) catch return error.OutOfMemory;
             defer gpa.free(src);
 
-            return Bool.init(ctx._meta.build.docs_git_dates.get(src) != null);
+            const dates = ctx._meta.build.docs_git_dates;
+            const vid = ctx.site._meta.variant_id;
+            return Bool.init(vid < dates.len and dates[vid].get(src) != null);
         }
     };
 
@@ -2430,8 +2432,10 @@ pub const Builtins = struct {
                 &ctx._meta.build.variants[ctx.site._meta.variant_id],
             ) catch return error.OutOfMemory;
             defer gpa.free(src);
-            const date = ctx._meta.build.docs_git_dates.get(src) orelse
-                return String.init("");
+            const dates = ctx._meta.build.docs_git_dates;
+            const vid = ctx.site._meta.variant_id;
+            if (vid >= dates.len) return String.init("");
+            const date = dates[vid].get(src) orelse return String.init("");
 
             // Formatting the date here rather than in the template is not a
             // shortcut: the template language has no date formatter and no way

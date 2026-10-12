@@ -40,6 +40,9 @@ union Site {
 
     struct Simple {
         title: bytes,
+        /// BCP 47 language tag for the whole site, used for `<html lang>` and
+        /// as the locale of a single-language site. Defaults to 'en'.
+        lang: ?bytes,
         /// URL where the website will be hosted.
         /// It must not contain a subpath, see `url_path_prefix`.
         host_url: bytes,

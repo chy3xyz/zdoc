@@ -24,6 +24,10 @@ const Signature = @import("doctypes.zig").Signature;
 
 host_url: []const u8,
 title: []const u8,
+/// BCP 47 language tag for a single-language site. Defaults to English,
+/// which is what `<html lang>` needs and what the docs mode assumes for a
+/// tree written in it.
+lang: []const u8 = "en",
 custom: ziggy.Dictionary(ziggy.Dynamic),
 _meta: struct {
     variant_id: u32,
@@ -65,8 +69,10 @@ pub const Builtins = struct {
             .ret = .String,
         };
         pub const docs_description =
-            \\In a multilingual website, returns the locale of the current 
-            \\variant as defined in your `build.zig` file. 
+            \\In a multilingual website, returns the locale of the current
+            \\variant as defined in your `build.zig` file. On a
+            \\single-language site it returns that site's language, which
+            \\defaults to English.
         ;
         pub const examples =
             \\<html lang="$site.localeCode()"></html>
@@ -87,9 +93,10 @@ pub const Builtins = struct {
 
             return switch (p._meta.kind) {
                 .multi => |l| String.init(l.code),
-                .simple => .{
-                    .err = "only available in a multilingual website",
-                },
+                // A single-language site has a language, even though it has no
+                // locale to speak of. `<html lang>` needs one, and refusing
+                // here is what left the built-in theme hardcoding "en".
+                .simple => String.init(p.lang),
             };
         }
     };

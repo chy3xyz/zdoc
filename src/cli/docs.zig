@@ -101,6 +101,7 @@ pub const DocsOptions = struct {
         var content_dir_path: ?[]const u8 = null;
         var base_dir_path: ?[]const u8 = null;
         var title: ?[]const u8 = null;
+        var lang: ?[]const u8 = null;
         var mermaid: ?[]const u8 = null;
         var url_path_prefix: ?[]const u8 = null;
         var theme_dir: ?[]const u8 = null;
@@ -142,6 +143,12 @@ pub const DocsOptions = struct {
                 title = args[idx];
             } else if (startsWith(u8, arg, "--title=")) {
                 title = arg["--title=".len..];
+            } else if (eql(u8, arg, "--lang")) {
+                idx += 1;
+                if (idx >= args.len) fatal.msg("error: missing argument to '{s}'", .{arg});
+                lang = args[idx];
+            } else if (startsWith(u8, arg, "--lang=")) {
+                lang = arg["--lang=".len..];
             } else if (eql(u8, arg, "--mermaid")) {
                 idx += 1;
                 if (idx >= args.len) fatal.msg("error: missing argument to '{s}'", .{arg});
@@ -220,6 +227,7 @@ pub const DocsOptions = struct {
             .mode = "docs",
             .site = .{ .simple = .{
                 .title = site_title,
+                .lang = lang,
                 .host_url = "http://localhost/",
                 .url_path_prefix = prefix,
                 .layouts_dir_path = docs.theme_layouts_path,
@@ -311,6 +319,9 @@ const help_message =
     \\
     \\Command specific options:
     \\  --title, -t TITLE   Site title (defaults to the directory name)
+    \\  --lang LANG         BCP 47 language tag for the site, used for
+    \\                      <html lang> and for choosing the right
+    \\                      localized copy of a page (defaults to 'en')
     \\  --base DIR          Base directory the content path is relative to
     \\                      (defaults to the current directory)
     \\  --output, -o DIR    Directory where to output the website

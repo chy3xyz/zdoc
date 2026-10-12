@@ -26,16 +26,22 @@ const Page = context.Page;
 /// The file name a sitemap is published under.
 pub const file_name = "sitemap.xml";
 
-/// Renders the sitemap for one variant into `writer`.
+/// Renders a sitemap covering every variant into `writer`.
 ///
-/// `url_prefix` must be the same value the site's links are built with, so
-/// that a `<loc>` and the href it is meant to describe agree. A sitemap that
-/// lists `/api/` for a page served at `/docs/api/` is worse than no sitemap:
-/// it tells a crawler the canonical URL is one that 404s.
+/// Each variant's own URL prefix is used, so a `<loc>` and the href it is
+/// meant to describe agree. A sitemap that lists `/api/` for a page served
+/// at `/docs/api/` is worse than no sitemap: it tells a crawler the
+/// canonical URL is one that 404s.
+///
+/// A multilingual site produces one sitemap listing every locale's URLs,
+/// which is what the format expects -- a crawler reads it as one set of pages
+/// to index, and the locale is part of each URL.
 pub fn write(
     writer: *Io.Writer,
-    v: *const Variant,
-    url_prefix: []const u8,
+    variants: []const *const Variant,
+    /// URL prefix for a single-variant build, where the variant does not
+    /// carry one of its own.
+    simple_url_prefix: []const u8,
 ) Io.Writer.Error!void {
     try writer.writeAll(
         \\<?xml version="1.0" encoding="UTF-8"?>
@@ -43,6 +49,25 @@ pub fn write(
         \\
     );
 
+    for (variants) |v| {
+        try writeVariant(writer, v, prefixFor(v, simple_url_prefix));
+    }
+
+    try writer.writeAll("</urlset>\n");
+}
+
+/// The URL prefix a variant's links are built with.
+fn prefixFor(v: *const Variant, simple_url_prefix: []const u8) []const u8 {
+    // A single-variant build has no per-variant prefix; the configured
+    // `url_path_prefix` is the one that applies.
+    return if (v.output_path_prefix.len == 0) simple_url_prefix else v.output_path_prefix;
+}
+
+fn writeVariant(
+    writer: *Io.Writer,
+    v: *const Variant,
+    url_prefix: []const u8,
+) Io.Writer.Error!void {
     for (v.pages.items) |*p| {
         if (!p._parse.active) continue;
         if (p._parse.status != .parsed) continue;
@@ -64,8 +89,6 @@ pub fn write(
         )});
         try writer.writeAll("</loc></url>\n");
     }
-
-    try writer.writeAll("</urlset>\n");
 }
 
 /// Escapes text for use in an XML attribute or text node.

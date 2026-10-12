@@ -36,6 +36,9 @@ pub const Simple = struct {
     /// URL where the website will be hosted.
     /// It must not contain a subpath.
     host_url: []const u8,
+    /// BCP 47 language tag for a single-language site, used for
+    /// `<html lang>`. Defaults to "en".
+    lang: ?[]const u8 = null,
     /// Set this value if your website is hosted under a subpath of `host_url`.
     ///
     /// `host_url` and `url_prefix_path` are split to allow the development
@@ -1013,6 +1016,7 @@ pub fn run(
                 try sites.putNoClobber(gpa, "", .{
                     .host_url = s.host_url,
                     .title = s.title,
+                    .lang = s.lang orelse "en",
                     .custom = cfg.custom,
                     ._meta = .{
                         .variant_id = 0,
@@ -1087,19 +1091,21 @@ pub fn run(
         // pointers into the map, and the lookups would silently miss.
         var git_arena_state: ?std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
         const git_arena = git_arena_state.?.allocator();
-        const content_dir = switch (cfg.site) {
-            .simple => |s| s.content_dir_path,
-            // Docs mode is single-variant, so a multilingual config never
-            // reaches here with more than one content directory.
-            .multilingual => |m| if (m.locales.len == 0) "" else m.locales[0].content_dir_path,
-        };
-        build.docs_git_dates = docs.GitDates.read(
-            gpa,
-            io,
-            git_arena,
-            options.base_dir_path,
-            content_dir,
-        ) catch fatal.oom();
+
+        // One pass per variant, against that variant's own content tree. A
+        // multilingual site has a separate tree per locale, and a single
+        // shared map would have their paths collide.
+        const dates = try gpa.alloc(docs.GitDates.Dates, build.variants.len);
+        for (build.variants, 0..) |*v, i| {
+            dates[i] = docs.GitDates.read(
+                gpa,
+                io,
+                git_arena,
+                options.base_dir_path,
+                v.content_dir_path,
+            ) catch fatal.oom();
+        }
+        build.docs_git_dates = dates;
         _ = &git_arena_state;
     }
 
@@ -1976,19 +1982,25 @@ pub fn run(
         // files span every page, and no single page's layout can express
         // that. They are generated after every page is parsed so the set of
         // pages is final.
-        if (build.mode == .disk and build.variants.len == 1) {
+        // Not gated on a single variant. A multilingual build used to skip
+        // both files entirely, which left `$site.searchIndex()` pointing at
+        // an index that was never written and gave a crawler nothing at all.
+        if (build.mode == .disk and build.variants.len > 0) {
             const out_dir = build.mode.disk.output_dir;
 
-            const url_prefix = switch (cfg.site) {
+            const simple_url_prefix = switch (cfg.site) {
                 .simple => |s| s.url_path_prefix orelse "",
                 .multilingual => "",
             };
 
-            // Both files below list page URLs, so both are built with the
-            // site's URL prefix. A sitemap that omits it describes URLs that do
-            // not resolve, which is worse than publishing no sitemap at all.
+            // One sitemap for the whole site, listing every locale's URLs with
+            // its own prefix. That is the shape the format expects: a crawler
+            // reads it as one set of pages, and the locale is part of each URL.
+            var ptrs = try arena.alloc(*const Variant, build.variants.len);
+            for (build.variants, 0..) |*v, i| ptrs[i] = v;
+
             var sitemap_aw: std.Io.Writer.Allocating = .init(arena);
-            docs.Sitemap.write(&sitemap_aw.writer, &build.variants[0], url_prefix) catch |err| switch (err) {
+            docs.Sitemap.write(&sitemap_aw.writer, ptrs, simple_url_prefix) catch |err| switch (err) {
                 error.WriteFailed => {},
             };
             out_dir.writeFile(io, .{
@@ -1996,12 +2008,37 @@ pub fn run(
                 .data = sitemap_aw.written(),
             }) catch |e| fatal.file(docs.Sitemap.file_name, e);
 
-            const index = docs.Search.build(arena, &build.variants[0], url_prefix) catch
-                fatal.oom();
-            out_dir.writeFile(io, .{
-                .sub_path = docs.Search.file_name,
-                .data = index,
-            }) catch |e| fatal.file(docs.Search.file_name, e);
+            // A search index per locale, written under that locale's output
+            // prefix. `$site.searchIndex()` already prefixes the link, so each
+            // page fetches its own language's index and never sees another's.
+            for (build.variants) |*v| {
+                const index = docs.Search.build(
+                    arena,
+                    v,
+                    if (v.output_path_prefix.len == 0)
+                        simple_url_prefix
+                    else
+                        v.output_path_prefix,
+                ) catch fatal.oom();
+
+                const name = if (v.output_path_prefix.len == 0)
+                    docs.Search.file_name
+                else
+                    try std.fmt.allocPrint(
+                        arena,
+                        "{s}{s}{s}",
+                        .{
+                            v.output_path_prefix,
+                            std.fs.path.sep_str,
+                            docs.Search.file_name,
+                        },
+                    );
+
+                out_dir.writeFile(io, .{
+                    .sub_path = name,
+                    .data = index,
+                }) catch |e| fatal.file(docs.Search.file_name, e);
+            }
         }
     }
 
