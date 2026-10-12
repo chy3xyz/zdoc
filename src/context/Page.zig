@@ -344,6 +344,33 @@ pub fn deinit(p: *const Page, gpa: Allocator) void {
     p._parse.arena.promote(gpa).deinit();
 }
 
+/// This page's source file path, relative to the content directory and using
+/// `/` separators -- the form `git log --name-only` reports.
+///
+/// Needed to look the page up in per-file data gathered at build time, such as
+/// its last commit date.
+pub fn sourcePath(
+    p: *const Page,
+    gpa: Allocator,
+    variant: *const Variant,
+) error{ OutOfMemory, WriteFailed }![]const u8 {
+    var aw: Writer.Allocating = .init(gpa);
+    const w = &aw.writer;
+
+    const components = p._scan.file.path.slice(&variant.path_table);
+    for (components, 0..) |c, i| {
+        if (i != 0) try w.writeByte('/');
+        try w.writeAll(c.slice(&variant.string_table));
+    }
+    const name = p._scan.file.name.slice(&variant.string_table);
+    if (components.len != 0 or name.len != 0) {
+        if (components.len != 0) try w.writeByte('/');
+        try w.writeAll(name);
+    }
+
+    return aw.written();
+}
+
 pub fn parse(
     p: *Page,
     io: Io,
@@ -2286,6 +2313,96 @@ pub const Builtins = struct {
                 };
             }
             return Optional.init(gpa, _footnotes);
+        }
+    };
+
+    /// Whether this page has a known last-modified date.
+    ///
+    /// `:if` takes a bool, so the template cannot ask whether a date string is
+    /// non-empty. Exposing the question directly is both clearer at the call
+    /// site and cheaper than rendering an empty date.
+    pub const hasLastUpdated = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\Documentation mode: true when `lastUpdated()` returns a date.
+        ;
+        pub const examples =
+            \\<footer :if="$page.hasLastUpdated()">
+            \\  <time :text="$page.lastUpdated()"></time>
+            \\</footer>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            const bad_arg: Value = .{ .err = "expected 0 arguments" };
+            if (args.len != 0) return bad_arg;
+
+            const src = p.sourcePath(
+                gpa,
+                &ctx._meta.build.variants[ctx.site._meta.variant_id],
+            ) catch return error.OutOfMemory;
+            defer gpa.free(src);
+
+            return Bool.init(ctx._meta.build.docs_git_dates.get(src) != null);
+        }
+    };
+
+    /// The date this page was last committed, as `YYYY-MM-DD`.
+    ///
+    /// Empty when the content is not in a git repository, when the page has
+    /// never been committed, or when git is not installed. Documentation
+    /// trees are often built from a tarball or a shallow clone, so an empty
+    /// string is the normal case in some setups and must not be treated as an
+    /// error by the template.
+    pub const lastUpdated = struct {
+        pub const signature: Signature = .{ .ret = .String };
+        pub const docs_description =
+            \\Documentation mode: the date this page was last changed, as
+            \\written in `YYYY-MM-DD`.
+            \\
+            \\Empty when the content is not in a git repository or the page
+            \\has never been committed.
+        ;
+        pub const examples =
+            \\<span class="doc__updated" :text="$page.lastUpdated()"></span>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            const bad_arg: Value = .{
+                .err = "expected 0 arguments",
+            };
+            if (args.len != 0) return bad_arg;
+
+            const src = p.sourcePath(
+                gpa,
+                &ctx._meta.build.variants[ctx.site._meta.variant_id],
+            ) catch return error.OutOfMemory;
+            defer gpa.free(src);
+            const date = ctx._meta.build.docs_git_dates.get(src) orelse
+                return String.init("");
+
+            // Formatting the date here rather than in the template is not a
+            // shortcut: the template language has no date formatter and no way
+            // to do arithmetic on a number.
+            const civil = docs.GitDates.civilFromDays(
+                @divFloor(date.unix, std.time.s_per_day),
+            );
+            // The year is formatted as unsigned because Zig's signed integer
+            // formatting prefixes a `+` for non-negative values, which would
+            // render as `+2026-10-12`.
+            const text = std.fmt.allocPrint(
+                gpa,
+                "{d:0>4}-{d:0>2}-{d:0>2}",
+                .{ @as(u32, @intCast(civil.year)), civil.month, civil.day },
+            ) catch return error.OutOfMemory;
+            return String.init(text);
         }
     };
 

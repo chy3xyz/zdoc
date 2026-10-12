@@ -1,10 +1,11 @@
-//! Standalone entry point for the frontmatter reader's unit tests.
+//! Standalone entry point for the docs-mode modules' unit tests.
 //!
-//! The reader reaches into the context module for the template value types, so
-//! a module rooted at `src/docs/` cannot resolve them. Rooting the test at
+//! Both reach into the context module for the template value types, so a
+//! module rooted at `src/docs/` cannot resolve them. Rooting the test at
 //! `src/` puts the whole tree in scope while leaving the production module
-//! boundary where it is.
+//! boundaries where they are.
 
 test {
     _ = @import("docs/frontmatter.zig");
+    _ = @import("docs/GitDates.zig");
 }

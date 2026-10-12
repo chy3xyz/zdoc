@@ -21,6 +21,8 @@ const slug = @import("docs/slug.zig");
 pub const Sidebar = @import("docs/Sidebar.zig");
 /// The YAML-subset frontmatter reader used in docs mode.
 pub const frontmatter = @import("docs/frontmatter.zig");
+/// Per-page last-modified dates read from git history.
+pub const GitDates = @import("docs/GitDates.zig");
 const Variant = @import("Variant.zig");
 const StringTable = @import("StringTable.zig");
 const PathTable = @import("PathTable.zig");

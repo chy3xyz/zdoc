@@ -600,6 +600,10 @@ pub const Options = struct {
     /// false, because a docs tree routinely links to files outside itself and
     /// failing the build over those helps nobody.
     strict_links: bool = false,
+    /// Docs mode only: read each page's last-modified date from git. Defaults
+    /// to on, and is turned off only when the content is not in a repository,
+    /// which costs one subprocess that exits without an answer.
+    git_dates: bool = true,
 
     pub const Mode = union(enum) {
         memory,
@@ -1040,6 +1044,32 @@ pub fn run(
         for (v.sections.items[1..]) |*s| {
             s.indexAndSortPages(gpa, arena, v, v.pages.items);
         }
+    }
+
+    // Read every page's last-modified date in one pass, before the pages are
+    // analyzed, so a page can be stamped as it is loaded. `options.base_dir_path`
+    // is the repository the content was committed from.
+    if (cfg.isDocs() and options.git_dates) {
+        // Deliberately not scoped to a block: the map's keys are arena
+        // allocated and live as long as the build does, so the arena must
+        // outlive it. A `defer` here would free them while pages still hold
+        // pointers into the map, and the lookups would silently miss.
+        var git_arena_state: ?std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+        const git_arena = git_arena_state.?.allocator();
+        const content_dir = switch (cfg.site) {
+            .simple => |s| s.content_dir_path,
+            // Docs mode is single-variant, so a multilingual config never
+            // reaches here with more than one content directory.
+            .multilingual => |m| if (m.locales.len == 0) "" else m.locales[0].content_dir_path,
+        };
+        build.docs_git_dates = docs.GitDates.read(
+            gpa,
+            io,
+            git_arena,
+            options.base_dir_path,
+            content_dir,
+        ) catch fatal.oom();
+        _ = &git_arena_state;
     }
 
     var parse_errors = false;

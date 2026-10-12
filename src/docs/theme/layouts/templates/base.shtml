@@ -20,6 +20,13 @@
 			</nav>
 			<main class="content" id="main">
 				<article class="doc" :html="$page.content()"></article>
+				<!-- A page's age says whether its advice still holds. The
+				     string is empty when the content is not in a git
+				     repository, which leaves the element empty rather than
+				     printing a placeholder. -->
+				<footer class="doc__footer" :if="$page.hasLastUpdated()">
+					<p class="doc__updated">Last updated: <time :text="$page.lastUpdated()"></time></p>
+				</footer>
 			</main>
 			<aside class="toc" id="toc">
 				<div class="toc__title">On this page</div>

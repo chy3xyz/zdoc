@@ -647,3 +647,18 @@ pre.mermaid svg {
     font-size: 19px;
   }
 }
+
+/* The last-updated line. Sits under the content, quiet on purpose: it is
+   metadata, not part of the document. */
+.doc__footer {
+  max-width: var(--content-max);
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.doc__updated {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 14px;
+}

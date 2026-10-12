@@ -31,6 +31,13 @@ any_rendering_error: std.atomic.Value(bool) = .{ .raw = false },
 /// still generated -- the point is to fail CI, not to withhold output -- but
 /// the command exits non-zero.
 docs_link_errors: usize = 0,
+/// Docs mode: each page's last commit date, keyed by its path relative to the
+/// content directory. Empty when the content is not in a git repository.
+///
+/// Lives on the build rather than in a global because the reader it replaces
+/// (`$build.git()`) is already populated once per variant, and a second,
+/// per-page source of truth would be a trap.
+docs_git_dates: @import("docs/GitDates.zig").Dates = .{},
 
 base_dir_path: []const u8,
 base_dir: Io.Dir,
