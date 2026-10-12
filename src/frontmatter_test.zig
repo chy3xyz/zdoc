@@ -12,4 +12,6 @@ test {
     _ = @import("docs/Sitemap.zig");
     _ = @import("docs/Containers.zig");
     _ = @import("docs/Exclude.zig");
+    _ = @import("docs.zig");
+    _ = @import("docs/Sidebar.zig");
 }

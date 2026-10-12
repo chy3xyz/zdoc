@@ -316,26 +316,25 @@ pub fn passthroughLink(
         else => "",
     };
 
-    // SuperMD classifies a link by its first character and then discards the
-    // first two characters of the target, so `../AGENTS.md` reaches this point
-    // as `/AGENTS.md`, the two discarded characters being the `..`. A ref
-    // that begins with `/` is therefore a target whose climb was spent, and
-    // putting those two characters back recovers exactly what was written.
-    //
-    // The prefix is `..` and not `../`: the ref still carries the separator,
-    // so `..` ++ `/AGENTS.md` is `../AGENTS.md` again.
-    //
-    // This is not cosmetic. Without it, `[x](../AGENTS.md)` was published as
-    // `/AGENTS.md` -- a different URL from the one in the source, pointing at
-    // a place the author never wrote about, with a warning that claimed the
-    // link had been left as written.
-    const restored = if (target.len != 0 and target[0] == '/')
-        try std.mem.concat(gpa, u8, &.{ "..", target })
-    else
-        target;
-
+    const restored = try restoreClimb(gpa, target);
     dir.kind = .{ .link = .{ .src = .{ .url = restored } } };
     return restored;
+}
+
+/// Puts back the `..` that SuperMD's link classification discards.
+///
+/// SuperMD classifies a link by its first character and then drops the first
+/// two characters of the target, so `../AGENTS.md` reaches the renderer as
+/// `/AGENTS.md` -- a different URL from the one in the source, published under
+/// a warning that claimed the link had been left as written.
+///
+/// A target beginning with `/` is one whose climb was spent, so putting the
+/// two discarded characters back recovers exactly what was written. The prefix
+/// is `..` and not `../` because the ref still carries the separator: `..`
+/// ++ `/AGENTS.md` is `../AGENTS.md` again.
+fn restoreClimb(gpa: std.mem.Allocator, ref: []const u8) std.mem.Allocator.Error![]const u8 {
+    if (ref.len == 0 or ref[0] != '/') return ref;
+    return std.mem.concat(gpa, u8, &.{ "..", ref });
 }
 
 /// Runs every docs-mode transformation over a freshly parsed document and
@@ -690,4 +689,57 @@ test "scan.resolveRelative counts the levels SuperMD dropped" {
     // Climbing above the content root names nothing that exists.
     try std.testing.expect(scan.resolveRelative(1, "/../X.md") == null);
     try std.testing.expect(scan.resolveRelative(0, "../X.md") == null);
+}
+
+const testing = std.testing;
+
+test "restoreClimb puts back the level SuperMD discards" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const gpa = arena_state.allocator();
+
+    // What the author wrote, and what the renderer would otherwise emit.
+    try testing.expectEqualStrings(
+        "../AGENTS.md",
+        try restoreClimb(gpa, "/AGENTS.md"),
+    );
+    try testing.expectEqualStrings(
+        "../../AGENTS.md",
+        try restoreClimb(gpa, "/../AGENTS.md"),
+    );
+    try testing.expectEqualStrings(
+        "../../../examples",
+        try restoreClimb(gpa, "/../../examples"),
+    );
+}
+
+test "restoreClimb leaves an in-tree target alone" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const gpa = arena_state.allocator();
+
+    // A bare relative ref never lost a level, and adding one would send the
+    // reader above the site root.
+    try testing.expectEqualStrings("other.md", try restoreClimb(gpa, "other.md"));
+    try testing.expectEqualStrings("", try restoreClimb(gpa, ""));
+
+    // An absolute URL is a ref that happens to start with a scheme, and a
+    // fragment-only self-link has no path to restore.
+    try testing.expectEqualStrings("https://x.dev/a", try restoreClimb(gpa, "https://x.dev/a"));
+}
+
+test "layoutName accepts a bare name" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const gpa = arena_state.allocator();
+
+    // Documentation is written against tools where the extension is
+    // implicit; requiring it would mean an existing `layout: home` still did
+    // not work.
+    try testing.expectEqualStrings("home.shtml", try layoutName(gpa, "home"));
+    try testing.expectEqualStrings("doc.shtml", try layoutName(gpa, "doc"));
+    // An explicit extension is already a file name.
+    try testing.expectEqualStrings("home.shtml", try layoutName(gpa, "home.shtml"));
+    try testing.expectEqualStrings("feed.xml", try layoutName(gpa, "feed.xml"));
+    try testing.expectEqualStrings("", try layoutName(gpa, ""));
 }

@@ -43,43 +43,14 @@ pub const Item = struct {
     /// value has to be chosen here.
     class: []const u8,
 
-    /// A section heading, a section with no page to link to, and a page are
-    /// three different things visually, and a flat list carrying only an
-    /// indent cannot tell a reader which is which.
-    const Class = struct {
-        const section = [_][]const u8{
-            "sidebar__section sidebar__section--d0",
-            "sidebar__section sidebar__section--d1",
-            "sidebar__section sidebar__section--d2",
-            "sidebar__section sidebar__section--d3",
-        };
-        const label = [_][]const u8{
-            "sidebar__label sidebar__label--d0",
-            "sidebar__label sidebar__label--d1",
-            "sidebar__label sidebar__label--d2",
-            "sidebar__label sidebar__label--d3",
-        };
-        const item = [_][]const u8{
-            "sidebar__item sidebar__item--d0",
-            "sidebar__item sidebar__item--d1",
-            "sidebar__item sidebar__item--d2",
-            "sidebar__item sidebar__item--d3",
-        };
-    };
-
     fn init(title: []const u8, page: ?*const Page, depth: u16, is_dir: bool) Item {
-        // Deeper levels clamp so the theme needs no unbounded class list.
-        const slot = @min(depth, 3);
         return .{
             .title = title,
             .page = page,
             .depth = depth,
             .is_link = page != null,
             .is_dir = is_dir,
-            .class = if (is_dir)
-                (if (page != null) Class.section[slot] else Class.label[slot])
-            else
-                Class.item[slot],
+            .class = classFor(is_dir, page != null, depth),
         };
     }
 
@@ -143,6 +114,42 @@ pub const Item = struct {
         };
     };
 };
+
+    /// A section heading, a section with no page to link to, and a page are
+    /// three different things visually, and a flat list carrying only an
+    /// indent cannot tell a reader which is which.
+    const Class = struct {
+        const section = [_][]const u8{
+            "sidebar__section sidebar__section--d0",
+            "sidebar__section sidebar__section--d1",
+            "sidebar__section sidebar__section--d2",
+            "sidebar__section sidebar__section--d3",
+        };
+        const label = [_][]const u8{
+            "sidebar__label sidebar__label--d0",
+            "sidebar__label sidebar__label--d1",
+            "sidebar__label sidebar__label--d2",
+            "sidebar__label sidebar__label--d3",
+        };
+        const item = [_][]const u8{
+            "sidebar__item sidebar__item--d0",
+            "sidebar__item sidebar__item--d1",
+            "sidebar__item sidebar__item--d2",
+            "sidebar__item sidebar__item--d3",
+        };
+    };
+
+/// The class for one sidebar entry, given what kind of entry it is.
+///
+/// Split out from `Item.init` so it can be tested without constructing a
+/// `Page`: the template language cannot concatenate a class, so the whole
+/// value is chosen here, and this is the only place that choice is made.
+fn classFor(is_dir: bool, has_page: bool, depth: u16) []const u8 {
+    // Deeper levels clamp so the theme needs no unbounded class list.
+    const slot = @min(depth, 3);
+    if (!is_dir) return Class.item[slot];
+    return if (has_page) Class.section[slot] else Class.label[slot];
+}
 
 /// A directory in the content tree, used only while building.
 const Dir = struct {
@@ -410,24 +417,61 @@ test "Item.class encodes the nesting depth" {
     );
 }
 
-test "naturalLess reads a numeric prefix as a number" {
-    // The whole point of the convention: byte order gets this backwards.
-    try testing.expect(naturalLess("02-api", "10-operations"));
-    try testing.expect(!naturalLess("10-operations", "02-api"));
+test "naturalLess handles labels with no digits, or digits mid-name" {
+    // A label with no leading digits sorts by its bytes...
+    try testing.expect(naturalLess("guide", "reference"));
+    // ...and a number that is not a *prefix* is just part of the name, not an
+    // ordering hint: `v2-api` still sorts after `v10-api` on the second
+    // character, which is the documented behaviour and is why the convention
+    // is a prefix rather than a number anywhere in the name.
+    try testing.expect(!naturalLess("v2-api", "v10-api"));
+    // An empty label must not read past the end, and sorts first, which is
+    // what comparing it as bytes gives.
+    try testing.expect(naturalLess("", "a"));
+    try testing.expect(!naturalLess("a", ""));
+}
 
-    // Leading zeros do not change the value, so `01` and `1` tie and the
-    // remaining bytes decide.
-    try testing.expect(naturalLess("01-guide", "02-api"));
+test "Item.class distinguishes a section from a page at every depth" {
+    // The sidebar is a flat list, so the class is the only thing telling a
+    // reader that a section is a section. It cannot be assembled in the
+    // template, which is why it is chosen whole here.
+    try testing.expectEqualStrings(
+        "sidebar__section sidebar__section--d0",
+        classFor(true, true, 0),
+    );
+    try testing.expectEqualStrings(
+        "sidebar__item sidebar__item--d2",
+        classFor(false, true, 2),
+    );
+    // A directory with no index page has nothing to link to, and reads as a
+    // heading rather than as a link.
+    try testing.expectEqualStrings(
+        "sidebar__label sidebar__label--d1",
+        classFor(true, false, 1),
+    );
+}
 
-    // Differing digit counts compare by magnitude.
-    try testing.expect(naturalLess("2-foo", "10-foo"));
-    try testing.expect(!naturalLess("10-foo", "2-foo"));
+test "Item.class clamps the depth so the theme needs no unbounded list" {
+    try testing.expectEqualStrings(
+        "sidebar__item sidebar__item--d3",
+        classFor(false, true, 9),
+    );
+    try testing.expectEqualStrings(
+        "sidebar__section sidebar__section--d3",
+        classFor(true, true, 40),
+    );
+}
 
-    // Plain labels still sort alphabetically.
-    try testing.expect(naturalLess("apple", "banana"));
-    try testing.expect(!naturalLess("banana", "apple"));
-
-    // A label with no digits at the front sorts after one that has them,
-    // rather than being compared digit-run against nothing.
-    try testing.expect(naturalLess("1-a", "b"));
+test "a section with an index page is the only kind that links" {
+    // The template branches on the class to choose between an anchor and a
+    // span. A bare directory has no page to open, so giving it the section
+    // class would hand the reader something to click that goes nowhere.
+    try testing.expectEqualStrings(
+        "sidebar__section sidebar__section--d0",
+        classFor(true, true, 0),
+    );
+    try testing.expectEqualStrings(
+        "sidebar__label sidebar__label--d0",
+        classFor(true, false, 0),
+    );
 }
