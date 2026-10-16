@@ -40,6 +40,17 @@ const Path = PathTable.Path;
 /// The layout used by pages that do not declare one.
 pub const default_layout = "doc.shtml";
 
+/// The layout `zdoc ebook` uses when a page does not declare one.
+///
+/// A book is the same tree as a documentation site, read as chapters: the
+/// root page is the cover, and every other page has a previous and a next.
+pub const ebook_layout = "ebook.shtml";
+
+/// Which built-in layout a page gets when its frontmatter does not name one.
+pub fn defaultLayout(ebook: bool) []const u8 {
+    return if (ebook) ebook_layout else default_layout;
+}
+
 /// Files that make up the built-in documentation theme.
 ///
 /// In docs mode the configured `layouts_dir_path` and `assets_dir_path` are
@@ -49,6 +60,7 @@ pub const default_layout = "doc.shtml";
 /// whether they came from the binary or from the user.
 const theme_layout_files = [_]struct { path: []const u8, src: []const u8 }{
     .{ .path = "doc.shtml", .src = @embedFile("docs/theme/layouts/doc.shtml") },
+    .{ .path = "ebook.shtml", .src = @embedFile("docs/theme/layouts/ebook.shtml") },
     .{ .path = "home.shtml", .src = @embedFile("docs/theme/layouts/home.shtml") },
     .{
         .path = "templates/base.shtml",
@@ -726,6 +738,11 @@ test "restoreClimb leaves an in-tree target alone" {
     // An absolute URL is a ref that happens to start with a scheme, and a
     // fragment-only self-link has no path to restore.
     try testing.expectEqualStrings("https://x.dev/a", try restoreClimb(gpa, "https://x.dev/a"));
+}
+
+test "defaultLayout picks the reading layout for an ebook" {
+    try std.testing.expectEqualStrings("ebook.shtml", defaultLayout(true));
+    try std.testing.expectEqualStrings("doc.shtml", defaultLayout(false));
 }
 
 test "layoutName accepts a bare name" {

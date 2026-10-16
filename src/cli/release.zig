@@ -8,8 +8,27 @@ const worker = @import("../worker.zig");
 const Allocator = std.mem.Allocator;
 const BuildAsset = root.BuildAsset;
 
+const Kind = enum { site, blog, release };
+
+pub fn siteCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
+    return run(io, gpa, args, .site);
+}
+
+pub fn blogCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
+    return run(io, gpa, args, .blog);
+}
+
 pub fn release(io: Io, gpa: Allocator, args: []const []const u8) bool {
+    return run(io, gpa, args, .release);
+}
+
+fn run(io: Io, gpa: Allocator, args: []const []const u8, kind: Kind) bool {
     const cmd = Command.parse(gpa, args) catch fatal.oom();
+    // Output stays next to where the command was typed. Entering the content
+    // directory afterwards must not move `public/` inside that directory.
+    const invoked_from = std.process.currentPathAlloc(io, gpa) catch fatal.oom();
+    const output_dir_path = absoluteOutput(gpa, invoked_from, cmd.output_dir_path);
+    enterContentDir(io, kind, cmd.dir);
     const cfg, const base_dir_path = root.Config.load(io, gpa, .auto);
 
     worker.start(io);
@@ -22,7 +41,7 @@ pub fn release(io: Io, gpa: Allocator, args: []const []const u8) bool {
         .mode = .{
             .disk = .{
                 .check_empty_output = !cmd.force,
-                .output_dir_path = cmd.output_dir_path,
+                .output_dir_path = output_dir_path,
             },
         },
     }) catch fatal.oom();
@@ -47,6 +66,8 @@ pub fn release(io: Io, gpa: Allocator, args: []const []const u8) bool {
 
 pub const Command = struct {
     // search: root.Config.Search,
+    /// Content root, when the user passed one. Null means the kind's default.
+    dir: ?[]const u8,
     output_dir_path: ?[]const u8,
     build_assets: std.StringArrayHashMapUnmanaged(BuildAsset),
     drafts: bool,
@@ -59,6 +80,7 @@ pub const Command = struct {
 
     pub fn parse(gpa: Allocator, args: []const []const u8) !Command {
         // var config_path: ?[]const u8 = null;
+        var dir: ?[]const u8 = null;
         var output_dir_path: ?[]const u8 = null;
         var build_assets: std.StringArrayHashMapUnmanaged(BuildAsset) = .empty;
         var drafts = false;
@@ -131,6 +153,8 @@ pub const Command = struct {
                 };
             } else if (eql(u8, arg, "--drafts")) {
                 drafts = true;
+            } else if (!startsWith(u8, arg, "-") and dir == null) {
+                dir = arg;
             } else {
                 fatal.msg("error: unexpected cli argument '{s}'\n", .{arg});
             }
@@ -138,6 +162,7 @@ pub const Command = struct {
 
         return .{
             // .search = if (config_path) |p| .{ .path = p } else .auto,
+            .dir = dir,
             .output_dir_path = output_dir_path,
             .build_assets = build_assets,
             .drafts = drafts,
@@ -146,8 +171,50 @@ pub const Command = struct {
     }
 };
 
+/// `site/` or `blog/` when that directory holds a config, otherwise the
+/// directory the command was typed in. An explicit path always wins.
+fn enterContentDir(io: Io, kind: Kind, explicit: ?[]const u8) void {
+    const dir = explicit orelse switch (kind) {
+        .site => if (ziggyIn(io, "site")) "site" else return,
+        .blog => if (ziggyIn(io, "blog")) "blog" else return,
+        .release => return,
+    };
+    if (std.mem.eql(u8, dir, ".")) return;
+    std.Io.Threaded.chdir(dir) catch |err| fatal.dir(dir, err);
+}
+
+fn ziggyIn(io: Io, dir_name: []const u8) bool {
+    var cwd = Io.Dir.cwd();
+    var dir = cwd.openDir(io, dir_name, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return false,
+        else => fatal.dir(dir_name, err),
+    };
+    defer dir.close(io);
+
+    var file = dir.openFile(io, "zine.ziggy", .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => fatal.file("zine.ziggy", err),
+    };
+    file.close(io);
+    return true;
+}
+
+fn absoluteOutput(gpa: Allocator, cwd: []const u8, output: ?[]const u8) []const u8 {
+    const rel = output orelse "public";
+    if (std.fs.path.isAbsolute(rel)) return rel;
+    return std.fs.path.resolve(gpa, &.{ cwd, rel }) catch fatal.oom();
+}
+
 const help_message =
-    \\Usage: zine release [OPTIONS]
+    \\Usage: zdoc site [dir] [OPTIONS]
+    \\       zdoc blog [dir] [OPTIONS]
+    \\
+    \\Build a site from SuperMD pages (.smd) and SuperHTML templates
+    \\(.shtml). `zdoc site` is the official site. `zdoc blog` is the
+    \\dated posts and their feed. Both read `zine.ziggy`.
+    \\
+    \\[dir] defaults to 'site/' or 'blog/' when that directory contains
+    \\`zine.ziggy`, otherwise the current directory.
     \\
     \\Command specific options:
     \\  --output, -o DIR   Directory where to output the website

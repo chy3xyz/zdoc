@@ -165,6 +165,7 @@ const Dir = struct {
 pub fn build(
     arena: Allocator,
     v: *const Variant,
+    reading: bool,
 ) Allocator.Error![]Item {
     // Map every directory path that exists to its node. Directories are
     // discovered as parents of page URLs, so a folder holding only
@@ -202,7 +203,7 @@ pub fn build(
     }
 
     var out: std.ArrayList(Item) = .empty;
-    try flatten(arena, v, &dirs, root_dir, 0, &out);
+    try flatten(arena, v, &dirs, root_dir, 0, &out, reading);
     return out.toOwnedSlice(arena);
 }
 
@@ -295,6 +296,7 @@ fn flatten(
     dir: *Dir,
     depth: u16,
     out: *std.ArrayList(Item),
+    reading: bool,
 ) Allocator.Error!void {
     // Scan order is whatever the filesystem yielded, which is not something a
     // reader can navigate, so sort each group by the label that is shown.
@@ -334,35 +336,103 @@ fn flatten(
         }
     }.lessThan);
 
+    if (reading) {
+        // A book is one sequence. A file named `01-departure.md` and a
+        // directory named `02-crossing/` are both chapters, so they share a
+        // sort: `order` when it is set, otherwise the path's last component.
+        // Sorting pages by their title would ignore the `01-` the author
+        // wrote, because the title is the heading, not the filename.
+        var children: std.ArrayListUnmanaged(Child) = .empty;
+        try children.ensureTotalCapacity(arena, dir.dirs.items.len + dir.pages.items.len);
+        for (dir.dirs.items) |child_path| children.appendAssumeCapacity(.{ .dir = child_path });
+        for (dir.pages.items) |p| children.appendAssumeCapacity(.{ .page = p });
+        std.mem.sort(Child, children.items, &sort_ctx, readingLess);
+
+        for (children.items) |child| switch (child) {
+            .dir => |child_path| try emitDir(arena, v, dirs, child_path, depth, out, true),
+            .page => |p| {
+                if (p.hidden) continue;
+                try out.append(arena, Item.init(p.title, p, depth, false));
+            },
+        };
+        return;
+    }
+
     // Directories first: readers look for the section, then the page.
     for (dir.dirs.items) |child_path| {
-        const child = dirs.get(child_path) orelse continue;
-
-        // A section whose index page is hidden leaves the sidebar entirely,
-        // children included. Hiding only the index would leave a section
-        // label with no page behind it, which reads as a broken link rather
-        // than as an author hiding a draft.
-        //
-        // This is the difference from `exclude`, which also stops the pages
-        // being built: `hidden` is for something still worth publishing at a
-        // URL, `exclude` is for something that should not be published at all.
-        if (child.index_page) |ip| {
-            if (ip.hidden) continue;
-        }
-
-        // A directory's index page titles the section far better than the
-        // directory name does: `ai/` holds a README whose H1 explains what the
-        // section is for. Only fall back to the directory name when there is
-        // no index page to ask.
-        const label = if (child.index_page) |ip| ip.title else child.name;
-        try out.append(arena, Item.init(label, child.index_page, depth, true));
-        try flatten(arena, v, dirs, child, depth + 1, out);
+        try emitDir(arena, v, dirs, child_path, depth, out, false);
     }
 
     for (dir.pages.items) |p| {
         if (p.hidden) continue;
         try out.append(arena, Item.init(p.title, p, depth, false));
     }
+}
+
+const Child = union(enum) {
+    dir: Path,
+    page: *const Page,
+};
+
+fn readingLess(ctx: *const SectionSort, lhs: Child, rhs: Child) bool {
+    const l = childOrder(ctx, lhs);
+    const r = childOrder(ctx, rhs);
+    if (l != r) return l < r;
+    return naturalLess(childName(ctx, lhs), childName(ctx, rhs));
+}
+
+fn childOrder(ctx: *const SectionSort, child: Child) i64 {
+    return switch (child) {
+        .dir => |path| ctx.orderOf(path),
+        .page => |p| if (p.order == Page.no_order) no_section_order else p.order,
+    };
+}
+
+fn childName(ctx: *const SectionSort, child: Child) []const u8 {
+    return switch (child) {
+        .dir => |path| dirName(ctx.v, path),
+        .page => |p| pageName(ctx.v, p),
+    };
+}
+
+/// The last component of a page URL. That is the filename without its
+/// extension, which is where an author writes `01-`.
+fn pageName(v: *const Variant, page: *const Page) []const u8 {
+    const components = page._scan.url.slice(&v.path_table);
+    if (components.len == 0) return page.title;
+    return components[components.len - 1].slice(&v.string_table);
+}
+
+fn emitDir(
+    arena: Allocator,
+    v: *const Variant,
+    dirs: *std.AutoHashMapUnmanaged(Path, *Dir),
+    child_path: Path,
+    depth: u16,
+    out: *std.ArrayList(Item),
+    reading: bool,
+) Allocator.Error!void {
+    const child = dirs.get(child_path) orelse return;
+
+    // A section whose index page is hidden leaves the sidebar entirely,
+    // children included. Hiding only the index would leave a section
+    // label with no page behind it, which reads as a broken link rather
+    // than as an author hiding a draft.
+    //
+    // This is the difference from `exclude`, which also stops the pages
+    // being built: `hidden` is for something still worth publishing at a
+    // URL, `exclude` is for something that should not be published at all.
+    if (child.index_page) |ip| {
+        if (ip.hidden) return;
+    }
+
+    // A directory's index page titles the section far better than the
+    // directory name does: `ai/` holds a README whose H1 explains what the
+    // section is for. Only fall back to the directory name when there is
+    // no index page to ask.
+    const label = if (child.index_page) |ip| ip.title else child.name;
+    try out.append(arena, Item.init(label, child.index_page, depth, true));
+    try flatten(arena, v, dirs, child, depth + 1, out, reading);
 }
 
 /// Compares two labels the way a reader expects a list of them to read.

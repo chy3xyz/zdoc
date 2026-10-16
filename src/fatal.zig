@@ -22,17 +22,26 @@ pub fn file(path: []const u8, err: anyerror) noreturn {
 
 pub fn help() noreturn {
     std.debug.print(
-        \\Usage: zine [COMMAND] [OPTIONS]
+        \\Usage: zdoc [COMMAND] [OPTIONS]
         \\
         \\Commands:
-        \\  (no command)       Start the development web server
-        \\  docs <dir>         Build a documentation site from a directory of
-        \\                     Markdown files, with no config file required
-        \\  init               Initialize a Zine site in the current directory
+        \\  site [dir]         Build the official site from SuperMD (.smd) and
+        \\                     SuperHTML (.shtml). Defaults to 'site/' when
+        \\                     that directory has a zine.ziggy
+        \\  blog [dir]         Build the blog the same way: dated posts and a
+        \\                     feed. Defaults to 'blog/' when it has a zine.ziggy
+        \\  docs [dir]         Build a documentation site from Markdown, with
+        \\                     no config file. Defaults to 'docs/' when that
+        \\                     directory exists, otherwise the current directory
+        \\  ebook [dir]        Build that same tree as a book. The root page
+        \\                     is the cover; other pages are chapters
+        \\  (no command)       Development server for a site or blog
+        \\  init [dir]         Initialize an official site: landing, product,
+        \\                     blog, plus docs/ and book/ Markdown trees
+        \\  release            Previous name of 'blog', from the current directory
         \\  install-schemas    Install up-to-date Ziggy Schemas for editor support
-        \\  release            Create a release of a Zine site
         \\  help               Show this menu and exit
-        \\  version            Print the Zine version and exit
+        \\  version            Print the zdoc version and exit
         \\
         \\Documentation options:
         \\  --title, -t TITLE   Site title (defaults to the directory name)

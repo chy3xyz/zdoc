@@ -1,18 +1,15 @@
 const std = @import("std");
 const Io = std.Io;
-const builtin = @import("builtin");
 const options = @import("options");
-const tracy = @import("tracy");
 const fatal = @import("../fatal.zig");
 const Allocator = std.mem.Allocator;
-
-const log = std.log.scoped(.init);
 
 pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
     _ = gpa;
 
     const cmd: Command = .parse(args);
     if (cmd.multilingual) @panic("TODO: multilingual init");
+    enterDir(io, cmd.dir);
 
     const File = struct { path: []const u8, src: []const u8 };
     const files = [_]File{
@@ -33,36 +30,24 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
             .src = @embedFile("init/content/index.smd"),
         },
         .{
-            .path = "content/about.smd",
-            .src = @embedFile("init/content/about.smd"),
+            .path = "content/product/index.smd",
+            .src = @embedFile("init/content/product/index.smd"),
         },
         .{
             .path = "content/blog/index.smd",
             .src = @embedFile("init/content/blog/index.smd"),
         },
         .{
-            .path = "content/blog/first-post/index.smd",
-            .src = @embedFile("init/content/blog/first-post/index.smd"),
+            .path = "content/blog/cover.smd",
+            .src = @embedFile("init/content/blog/cover.smd"),
         },
         .{
-            .path = "content/blog/first-post/fanzine.jpg",
-            .src = @embedFile("init/content/blog/first-post/fanzine.jpg"),
+            .path = "content/blog/docs-first.smd",
+            .src = @embedFile("init/content/blog/docs-first.smd"),
         },
         .{
-            .path = "content/blog/second-post.smd",
-            .src = @embedFile("init/content/blog/second-post.smd"),
-        },
-        .{
-            .path = "content/devlog/index.smd",
-            .src = @embedFile("init/content/devlog/index.smd"),
-        },
-        .{
-            .path = "content/devlog/1990.smd",
-            .src = @embedFile("init/content/devlog/1990.smd"),
-        },
-        .{
-            .path = "content/devlog/1989.smd",
-            .src = @embedFile("init/content/devlog/1989.smd"),
+            .path = "content/blog/spine.smd",
+            .src = @embedFile("init/content/blog/spine.smd"),
         },
         .{
             .path = "layouts/index.shtml",
@@ -85,18 +70,6 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
             .src = @embedFile("init/layouts/blog.xml"),
         },
         .{
-            .path = "layouts/devlog.shtml",
-            .src = @embedFile("init/layouts/devlog.shtml"),
-        },
-        .{
-            .path = "layouts/devlog.xml",
-            .src = @embedFile("init/layouts/devlog.xml"),
-        },
-        .{
-            .path = "layouts/devlog-archive.shtml",
-            .src = @embedFile("init/layouts/devlog-archive.shtml"),
-        },
-        .{
             .path = "layouts/templates/base.shtml",
             .src = @embedFile("init/layouts/templates/base.shtml"),
         },
@@ -105,29 +78,40 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
             .src = @embedFile("init/assets/style.css"),
         },
         .{
-            .path = "assets/highlight.css",
-            .src = @embedFile("init/assets/highlight.css"),
+            .path = "assets/hero-desk.jpg",
+            .src = @embedFile("init/assets/hero-desk.jpg"),
         },
         .{
-            .path = "assets/under-construction.gif",
-            .src = @embedFile("init/assets/under-construction.gif"),
-        },
-
-        .{
-            .path = "assets/render-mathtex.js",
-            .src = @embedFile("init/assets/render-mathtex.js"),
+            .path = "assets/open-pages.jpg",
+            .src = @embedFile("init/assets/open-pages.jpg"),
         },
         .{
-            .path = "assets/Temml-Local.css",
-            .src = @embedFile("init/assets/Temml-Local.css"),
+            .path = "docs/index.md",
+            .src = @embedFile("init/docs/index.md"),
         },
         .{
-            .path = "assets/Temml.woff2",
-            .src = @embedFile("init/assets/Temml.woff2"),
+            .path = "docs/01-start/index.md",
+            .src = @embedFile("init/docs/01-start/index.md"),
         },
         .{
-            .path = "assets/temml.min.js",
-            .src = @embedFile("init/assets/temml.min.js"),
+            .path = "docs/02-ship/index.md",
+            .src = @embedFile("init/docs/02-ship/index.md"),
+        },
+        .{
+            .path = "book/index.md",
+            .src = @embedFile("init/book/index.md"),
+        },
+        .{
+            .path = "book/01-question.md",
+            .src = @embedFile("init/book/01-question.md"),
+        },
+        .{
+            .path = "book/02-method.md",
+            .src = @embedFile("init/book/02-method.md"),
+        },
+        .{
+            .path = "book/03-result.md",
+            .src = @embedFile("init/book/03-result.md"),
         },
     };
 
@@ -159,29 +143,47 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
 
     std.debug.print(
         \\
-        \\Run `zine` to run the Zine development server.
-        \\Run `zine release` to build your website in 'public/'.
-        \\Run `zine help` for more commands and options.
+        \\Official site is ready. The landing, product page and blog
+        \\build together. Docs and the paper are Markdown trees beside them.
         \\
-        \\Read https://zine-ssg.io/docs/ to learn more about Zine.
+        \\  zdoc                 preview the landing
+        \\  zdoc site            build the landing, product and blog into public/
+        \\  zdoc docs docs --output public/docs --url-prefix /docs --title "南窗"
+        \\  zdoc ebook book --output public/book --url-prefix /book --title "作品如何变成收入"
+        \\
+        \\Build the site first, then docs and the book into that same public/.
+        \\The landing links to /docs/ and /book/.
         \\
     , .{});
 
     return false;
 }
 
+fn enterDir(io: Io, explicit: ?[]const u8) void {
+    const dir = explicit orelse return;
+    if (std.mem.eql(u8, dir, ".")) return;
+    var opened = Io.Dir.cwd().createDirPathOpen(io, dir, .{}) catch |err| fatal.dir(dir, err);
+    opened.close(io);
+    std.Io.Threaded.chdir(dir) catch |err| fatal.dir(dir, err);
+}
+
 const Command = struct {
     multilingual: bool,
+    dir: ?[]const u8,
+
     fn parse(args: []const []const u8) Command {
         var multilingual: ?bool = null;
+        var dir: ?[]const u8 = null;
         for (args) |a| {
             if (std.mem.eql(u8, a, "--multilingual")) {
                 multilingual = true;
-            }
-
-            if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
+            } else if (std.mem.eql(u8, a, "-h") or std.mem.eql(u8, a, "--help")) {
                 fatal.msg(
-                    \\Usage: zine init [OPTIONS]
+                    \\Usage: zdoc init [dir]
+                    \\
+                    \\Write an official site into [dir], or the current directory.
+                    \\The landing, a product page and a blog are a zine project.
+                    \\docs/ and book/ are Markdown trees for `zdoc docs` and `zdoc ebook`.
                     \\
                     \\Command specific options:
                     \\  --multilingual   Setup a sample multilingual website
@@ -191,9 +193,18 @@ const Command = struct {
                     \\
                     \\
                 , .{});
+            } else if (std.mem.startsWith(u8, a, "-")) {
+                fatal.msg("error: unexpected cli argument '{s}'\n", .{a});
+            } else if (dir == null) {
+                dir = a;
+            } else {
+                fatal.msg("error: unexpected cli argument '{s}'\n", .{a});
             }
         }
 
-        return .{ .multilingual = multilingual orelse false };
+        return .{
+            .multilingual = multilingual orelse false,
+            .dir = dir,
+        };
     }
 };

@@ -1,36 +1,27 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 	<head id="head">
 		<meta charset="utf-8">
-		<meta name="viewport" content="initial-scale=1">
-		<title :text="$site.title"></title>
-		<link type="text/css" rel="stylesheet" href="$site.asset('style.css').link()">
-		<link type="text/css" rel="stylesheet" href="$site.asset('highlight.css').link()">
-		<!-- mathtex -->
-		<link type="text/css" rel="stylesheet" href="$site.asset('Temml-Local.css').link()">
-		<script defer src="$site.asset('temml.min.js').link()"></script>
-		<script defer src="$site.asset('render-mathtex.js').link()"></script>
-		<!-- /mathtex -->
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta name="color-scheme" content="light dark">
+		<title :text="$page.title"></title>
+		<link rel="stylesheet" href="$site.asset('style.css').link()">
 		<super>
 	</head>
 	<body id="body">
-		<h1 class="site-title" :text="$site.title"></h1>
-		<nav>
-			<a href="$site.page('').link()">Home</a>
-			&nbsp; • &nbsp;
-			<a href="$site.page('about').link()">About</a>
-			&nbsp; • &nbsp;
-			<a href="$site.page('blog').link()">Blog</a>
-			<ctx :if="$site.page('devlog').subpages().first?()">
-				&nbsp; • &nbsp;
-				<a href="$if.link()">Devlog</a>
-			</ctx>
-		</nav>
+		<header class="nav">
+			<a class="logo" href="$site.page('').link()" :text="$site.title"></a>
+			<nav>
+				<a href="$site.page('product').link()">产品</a>
+				<a href="$site.page('blog').link()">博客</a>
+				<a href="/docs/">文档</a>
+				<a href="/book/">论文</a>
+			</nav>
+		</header>
 		<super>
-		<footer>
-			<hr>
-			<h5>SITE UNDER CONSTRUCTION</h5>
-			<img src="$site.asset('under-construction.gif').link()" width=90>
+		<footer class="foot">
+			<span :text="$site.title"></span>
+			<span>产品、博客、文档、论文</span>
 		</footer>
 	</body>
 </html>

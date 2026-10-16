@@ -233,7 +233,7 @@ pub const Command = struct {
 };
 
 const help_message =
-    \\Usage: zine debug [OPTIONS]
+    \\Usage: zdoc debug [OPTIONS]
     \\
     \\Command specific options:
     \\  --ids        Include ids when printing info. Snapshot unsafe!

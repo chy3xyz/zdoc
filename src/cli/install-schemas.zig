@@ -98,7 +98,7 @@ pub const Command = struct {
 };
 
 const help_message =
-    \\Usage: zine install-schemas [OPTIONS]
+    \\Usage: zdoc install-schemas [OPTIONS]
     \\
     \\Installs up-to-date Ziggy Schema files to be used by the Ziggy
     \\Language Server to provide schema checking, autocomplete and

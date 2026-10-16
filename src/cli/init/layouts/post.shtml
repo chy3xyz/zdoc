@@ -1,40 +1,25 @@
 <extend template="base.shtml">
 <head id="head">
-	<style>
-		#prev-next {
-			display: flex;
-			flex-direction: row;
-			justify-content: space-between;
-			margin-top: 40px;
-		}
-		
-		figure {
-			align-self: center;
-			text-align: center;
-			font-style: italic;
-		}
-		
-		.post {
-			display:flex;
-			flex-direction: column;
-		}
-	</style>
 </head>
 <body id="body">
-	<h1 :text="$page.title"></h1>
-	<div class="post" :html="$page.content()"></div>
-	<div id="prev-next">
-		<div :if="$page.prevPage?()">
-			<a href="$if.link()">
-				←
-				<span :text="$if.title"></span>
-			</a>
-		</div>
-		<div :if="$page.nextPage?()">
-			<a href="$if.link()">
-				<span :text="$if.title"></span>
-				→
-			</a>
-		</div>
-	</div>
+	<article class="read">
+		<p class="where"><a href="$site.page('blog').link()">博客</a></p>
+		<h1 :text="$page.title"></h1>
+		<time class="when" :text="$page.date.format('2006-01-02')"></time>
+		<div class="prose" :html="$page.content()"></div>
+		<nav class="turn">
+			<div :if="$page.prevPage?()">
+				<a href="$if.link()">
+					<span>上一篇</span>
+					<strong :text="$if.title"></strong>
+				</a>
+			</div>
+			<div :if="$page.nextPage?()">
+				<a href="$if.link()">
+					<span>下一篇</span>
+					<strong :text="$if.title"></strong>
+				</a>
+			</div>
+		</nav>
+	</article>
 </body>

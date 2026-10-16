@@ -8,7 +8,7 @@
   var here = location.pathname.replace(/\/index\.html$/, "/");
   here = here.replace(/\/+$/, "") || "/";
 
-  var links = document.querySelectorAll(".sidebar__item");
+  var links = document.querySelectorAll(".sidebar__item, .sidebar__section");
   for (var i = 0; i < links.length; i++) {
     var href = links[i].getAttribute("href") || "";
     var norm = href.replace(/\/index\.html$/, "/").replace(/\/+$/, "") || "/";

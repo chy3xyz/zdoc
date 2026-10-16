@@ -483,6 +483,7 @@ pub fn parse(
             full_src,
             frontmatter_start.?,
             variant,
+            cfg.isEbook(),
         );
         return;
     }
@@ -526,7 +527,7 @@ pub fn parse(
                     p._scan.file.name.slice(&variant.string_table),
                 );
             }
-            if (p.layout.len == 0) p.layout = docs.default_layout;
+            if (p.layout.len == 0) p.layout = docs.defaultLayout(cfg.isEbook());
             return;
         }
 
@@ -596,7 +597,7 @@ pub fn parse(
     // fall back to the built-in documentation layout and the first H1.
     if (cfg.isDocs()) {
         p._analysis.warnings = docs.postProcess(gpa, &p._parse.ast) catch fatal.oom();
-        if (p.layout.len == 0) p.layout = docs.default_layout;
+        if (p.layout.len == 0) p.layout = docs.defaultLayout(cfg.isEbook());
         if (p.title.len == 0) {
             p.title = docs.titleFromHeadings(gpa, &p._parse.ast) catch |err| switch (err) {
                 error.OutOfMemory => fatal.oom(),
@@ -629,6 +630,7 @@ fn parseDocsFrontmatter(
     /// Byte offset of the first character after the opening delimiter.
     fm_start: usize,
     variant: *const Variant,
+    ebook: bool,
 ) void {
     const body_start = findBodyStart(full_src, fm_start);
 
@@ -687,7 +689,7 @@ fn parseDocsFrontmatter(
 
     // Frontmatter is optional and so is every field in it: a page that sets
     // none of them still needs a title and a layout.
-    if (p.layout.len == 0) p.layout = docs.default_layout;
+    if (p.layout.len == 0) p.layout = docs.defaultLayout(ebook);
     p.layout = docs.layoutName(gpa, p.layout) catch fatal.oom();
     if (p.title.len == 0) {
         p.title = docs.titleFromHeadings(gpa, &p._parse.ast) catch |err| switch (err) {
@@ -1960,6 +1962,62 @@ pub const Builtins = struct {
         }
     };
 
+    pub const @"prevChapter?" = struct {
+        pub const signature: Signature = .{ .ret = .{ .Opt = .Page } };
+        pub const docs_description =
+            \\The previous chapter in reading order.
+            \\
+            \\Reading order is the documentation sidebar: directory order,
+            \\numeric prefixes and `order` frontmatter. The root page is the
+            \\cover and comes first, even though it is not itself a sidebar
+            \\entry. The value is optional; use it with an `if` attribute and
+            \\read the page through `$if`.
+        ;
+        pub const examples =
+            \\<ctx :if="$page.prevChapter?()">
+            \\  <a href="$if.link()" :text="$if.title"></a>
+            \\</ctx>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            const v = &ctx._meta.build.variants[p._scan.variant_id];
+            const neighbor = chapterNeighbor(gpa, v, p, -1) catch return error.OutOfMemory;
+            const prev = neighbor orelse return Optional.Null;
+            return Optional.init(gpa, prev);
+        }
+    };
+
+    pub const @"nextChapter?" = struct {
+        pub const signature: Signature = .{ .ret = .{ .Opt = .Page } };
+        pub const docs_description =
+            \\The next chapter in reading order.
+            \\
+            \\See `prevChapter`. The last chapter has none.
+        ;
+        pub const examples =
+            \\<ctx :if="$page.nextChapter?()">
+            \\  <a href="$if.link()" :text="$if.title"></a>
+            \\</ctx>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            const v = &ctx._meta.build.variants[p._scan.variant_id];
+            const neighbor = chapterNeighbor(gpa, v, p, 1) catch return error.OutOfMemory;
+            const next = neighbor orelse return Optional.Null;
+            return Optional.init(gpa, next);
+        }
+    };
+
     pub const link = struct {
         pub const signature: Signature = .{ .ret = .String };
         pub const docs_description =
@@ -2631,3 +2689,35 @@ pub const ContentSection = struct {
         };
     };
 };
+
+/// The page `step` places away from `page` in reading order.
+///
+/// The spine is the root page, then every sidebar entry that links to a
+/// page, in the order the sidebar was built. That is directory order with
+/// numeric prefixes and `order` already applied, which is the order a reader
+/// meets the chapters. A page that is not on the spine (hidden, or not part
+/// of this variant) has no neighbor.
+fn chapterNeighbor(
+    gpa: Allocator,
+    v: *const Variant,
+    page: *const Page,
+    step: isize,
+) Allocator.Error!?*const Page {
+    var spine: std.ArrayList(*const Page) = .empty;
+    defer spine.deinit(gpa);
+
+    const cover = &v.pages.items[v.root_index];
+    if (cover._parse.active) try spine.append(gpa, cover);
+
+    for (v.sidebar) |item| {
+        const chapter = item.page orelse continue;
+        if (chapter == cover) continue;
+        if (!chapter._parse.active) continue;
+        try spine.append(gpa, chapter);
+    }
+
+    const at = std.mem.indexOfScalar(*const Page, spine.items, page) orelse return null;
+    const dest = @as(isize, @intCast(at)) + step;
+    if (dest < 0 or dest >= @as(isize, @intCast(spine.items.len))) return null;
+    return spine.items[@intCast(dest)];
+}

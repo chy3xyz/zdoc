@@ -176,7 +176,7 @@ pub const Config = struct {
     supermd: SuperMd = .{},
     /// Selects the content-authoring dialect. 'blog' (the default) is Zine's
     /// original behaviour; 'docs' targets plain Markdown trees written for
-    /// GitHub.
+    /// GitHub. 'ebook' is that same tree, rendered as a book.
     mode: []const u8 = "blog",
     site: Site,
     custom: ziggy.Dictionary(ziggy.Dynamic) = .empty,
@@ -184,8 +184,14 @@ pub const Config = struct {
     const config_file_basename = "zine.ziggy";
     pub const Search = union(enum) { auto, path: []const u8 };
 
+    /// An ebook is a documentation tree with a different default layout, so
+    /// every docs-mode path applies to it. The layout choice is `isEbook`.
     pub fn isDocs(self: *const Config) bool {
-        return std.mem.eql(u8, self.mode, "docs");
+        return std.mem.eql(u8, self.mode, "docs") or self.isEbook();
+    }
+
+    pub fn isEbook(self: *const Config) bool {
+        return std.mem.eql(u8, self.mode, "ebook");
     }
 
     pub const SuperMd = struct {
@@ -1097,7 +1103,7 @@ pub fn run(
         // shared map would have their paths collide.
         const dates = try gpa.alloc(docs.GitDates.Dates, build.variants.len);
         for (build.variants, 0..) |*v, i| {
-            // Resolved against the base directory because `zdoc docs docs` is
+            // Resolved against the base directory because `zdoc docs` is
             // run from the repository root but the content path is relative
             // to it, and `zdoc docs ~/elsewhere/docs` carries an absolute one.
             // git has to run inside the content tree itself: run from the
@@ -1300,8 +1306,9 @@ pub fn run(
                         build.cfg.isDocs())
                     {
                         docs_layout_warnings += 1;
-                        printDocsLayoutWarning(v, p);
-                        p.layout = docs.default_layout;
+                        const fallback = docs.defaultLayout(build.cfg.isEbook());
+                        printDocsLayoutWarning(v, p, fallback);
+                        p.layout = fallback;
                         break :layout;
                     }
 
@@ -1979,7 +1986,7 @@ pub fn run(
     // (inactive pages are excluded). Compute it here, just before rendering.
     if (build.cfg.isDocs()) {
         for (build.variants) |*v| {
-            v.sidebar = docs.Sidebar.build(arena, v) catch fatal.oom();
+            v.sidebar = docs.Sidebar.build(arena, v, build.cfg.isEbook()) catch fatal.oom();
         }
 
         // Written here rather than by the template pipeline because both
@@ -2205,6 +2212,7 @@ pub fn run(
 fn printDocsLayoutWarning(
     v: *Variant,
     p: *const context.Page,
+    fallback: []const u8,
 ) void {
     std.debug.print(
         \\{f}: warning: unknown layout '{s}', rendering as '{s}'
@@ -2217,7 +2225,7 @@ fn printDocsLayoutWarning(
             "",
         ),
         p.layout,
-        docs.default_layout,
+        fallback,
     });
 }
 

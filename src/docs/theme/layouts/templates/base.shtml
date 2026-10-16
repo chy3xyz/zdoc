@@ -62,15 +62,30 @@
 				</div>
 				<super>
 			</nav>
-			<main class="content" id="main">
+<main class="content" id="main">
 				<article class="doc" :html="$page.content()"></article>
+				<footer class="doc__footer">
 				<!-- A page's age says whether its advice still holds. The
 				     string is empty when the content is not in a git
 				     repository, which leaves the element empty rather than
-				     printing a placeholder. -->
-				<footer class="doc__footer" :if="$page.hasLastUpdated()">
+				     printing a placeholder.
+
+				     The footer itself is unconditional even though this line
+				     is not: it also carries the attribution, and an
+				     attribution that appears only for git-backed trees would
+				     be a worse advertisement than none.
+
+				     `:if` on the `<p>` would still emit the empty element,
+				     so the conditional wraps it in a `<ctx>` -- the same
+				     wrapper the description group uses above. -->
+				<ctx :if="$page.hasLastUpdated()">
 					<p class="doc__updated">Last updated: <time :text="$page.lastUpdated()"></time></p>
-				</footer>
+				</ctx>
+				<!-- The link a reader can follow to attribute the tool. Kept as
+				     a real href rather than plain text: an attribution nobody
+				     can act on does not advertise anything. -->
+				<p class="doc__powered">Built with <a href="https://github.com/chy3xyz/zdoc">zdoc</a></p>
+			</footer>
 			</main>
 			<aside class="toc" id="toc">
 				<div class="toc__title">On this page</div>

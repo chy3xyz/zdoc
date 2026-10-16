@@ -17,11 +17,18 @@ pub const std_options: std.Options = .{
 const Command = enum {
     init,
     @"install-schemas",
+    /// Official site: SuperMD pages and SuperHTML templates, from `zine.ziggy`.
+    site,
+    /// Blog: the same templates, with dated posts and a feed.
+    blog,
+    /// Previous name of `blog`, without the `blog/` directory default.
     release,
     debug,
     /// Build a documentation site from a directory of Markdown files, with no
     /// config file. The entry point this fork exists to provide.
     docs,
+    /// The same Markdown tree as `docs`, rendered as a book.
+    ebook,
     help,
     @"-h",
     @"--help",
@@ -120,15 +127,18 @@ pub fn main(init: std.process.Init) u8 {
 
     const any_error = switch (cmd) {
         .init => @import("cli/init.zig").init(io, gpa, args[2..]),
+        .site => @import("cli/release.zig").siteCommand(io, gpa, args[2..]),
+        .blog => @import("cli/release.zig").blogCommand(io, gpa, args[2..]),
         .release => @import("cli/release.zig").release(io, gpa, args[2..]),
         .debug => @import("cli/debug.zig").debug(io, gpa, args[2..]),
         .docs => @import("cli/docs.zig").docsCommand(io, gpa, args[2..]),
+        .ebook => @import("cli/docs.zig").ebookCommand(io, gpa, args[2..]),
         .@"install-schemas" => @import("cli/install-schemas.zig").install_schemas(io, gpa, args[2..]),
         .help, .@"-h", .@"--help" => fatal.help(),
         .version, .@"-v", .@"--version" => printVersion(),
         .serve, .server, .dev, .develop => {
             std.debug.print(
-                "error: run zine without any subcommand to start the development server\n\n",
+                "error: run zdoc without any subcommand to start the development server\n\n",
                 .{},
             );
             fatal.help();

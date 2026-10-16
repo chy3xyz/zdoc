@@ -2,6 +2,48 @@
 <head id="head">
 </head>
 <body id="body">
-	<h1 :text="$page.title"></h1>
-	<div :html="$page.content()"></div>
+	<section class="hero">
+		<div class="hero-copy">
+			<h1>创作完成之后，才开始卖</h1>
+			<p class="sub">做完的作品从这里分成产品、博客、文档和论文。</p>
+			<div class="actions">
+				<a class="btn" href="$site.page('product').link()">看产品</a>
+				<a class="btn ghost" href="/book/">读论文</a>
+			</div>
+		</div>
+		<figure class="hero-photo">
+			<img src="$site.asset('hero-desk.jpg').link()" width="1050" height="1400" alt="浅灰桌上一本空白册子和一杯水">
+		</figure>
+	</section>
+	<section class="rooms">
+		<a class="room room-lead" href="$site.page('product').link()">
+			<img src="$site.asset('open-pages.jpg').link()" width="1400" height="1050" alt="摊开的白页">
+			<span class="room-copy">
+				<strong>产品官网</strong>
+				<span>稿酬把价格和交付放在同一页。</span>
+			</span>
+		</a>
+		<a class="room room-blog" href="$site.page('blog').link()">
+			<strong>博客</strong>
+			<span>笔记按日期排，可以订阅。</span>
+		</a>
+		<a class="room room-docs" href="/docs/">
+			<strong>文档</strong>
+			<span>步骤写在这里，不写在介绍页。</span>
+		</a>
+		<a class="room room-paper" href="/book/">
+			<strong>论文</strong>
+			<span>按章节读，从封面走到结果。</span>
+		</a>
+	</section>
+	<section class="notes">
+		<h2>最新</h2>
+		<div class="note-list" :loop="$site.page('blog').subpages()">
+			<a href="$loop.it.link()">
+				<time :text="$loop.it.date.format('2006-01-02')"></time>
+				<strong :text="$loop.it.title"></strong>
+			</a>
+		</div>
+	</section>
+	<div class="closing prose" :html="$page.content()"></div>
 </body>

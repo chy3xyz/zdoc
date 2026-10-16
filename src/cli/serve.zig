@@ -160,8 +160,8 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
     );
 
     std.debug.print(
-        \\Starting the Zine development server.
-        \\Run 'zine help' to learn more about available options.
+        \\Starting the development server.
+        \\Run 'zdoc help' to learn more about available options.
         \\
         \\
     , .{});

@@ -2,6 +2,8 @@
 <head id="head">
 </head>
 <body id="body">
-	<h1 :text="$page.title"></h1>
-	<div :html="$page.content()"></div>
+	<article class="read">
+		<h1 :text="$page.title"></h1>
+		<div class="prose" :html="$page.content()"></div>
+	</article>
 </body>

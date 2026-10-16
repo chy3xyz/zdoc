@@ -20,7 +20,15 @@ const Allocator = std.mem.Allocator;
 const BuildAsset = root.BuildAsset;
 
 pub fn docsCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
-    const cmd = DocsOptions.parse(io, gpa, args) catch fatal.oom();
+    return run(io, gpa, args, false);
+}
+
+pub fn ebookCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
+    return run(io, gpa, args, true);
+}
+
+fn run(io: Io, gpa: Allocator, args: []const []const u8, ebook: bool) bool {
+    const cmd = DocsOptions.parse(io, gpa, args, ebook) catch fatal.oom();
 
     worker.start(io);
     defer if (builtin.mode == .debug) worker.stopWaitAndDeinit(io);
@@ -67,13 +75,14 @@ pub fn docsCommand(io: Io, gpa: Allocator, args: []const []const u8) bool {
     }
 
     const out = cmd.output_dir_path orelse "public";
+    const kind = if (ebook) "Reading" else "Documentation";
     std.debug.print(
         \\
-        \\Documentation site generated in '{s}/'.
+        \\{s} site generated in '{s}/'.
         \\Point a web server at that directory to publish it.
         \\
         \\
-    , .{out});
+    , .{ kind, out });
 
     return false;
 }
@@ -97,7 +106,7 @@ pub const DocsOptions = struct {
         ba.deinit(gpa);
     }
 
-    pub fn parse(io: Io, gpa: Allocator, args: []const []const u8) !DocsOptions {
+    pub fn parse(io: Io, gpa: Allocator, args: []const []const u8, ebook: bool) !DocsOptions {
         var content_dir_path: ?[]const u8 = null;
         var base_dir_path: ?[]const u8 = null;
         var title: ?[]const u8 = null;
@@ -191,18 +200,10 @@ pub const DocsOptions = struct {
             }
         }
 
-        const content = content_dir_path orelse {
-            fatal.msg(
-                \\
-                \\error: missing the documentation directory
-                \\
-                \\Usage: zdoc docs <dir>
-                \\  e.g. zdoc docs docs
-                \\       zdoc docs ~/projects/myapp/docs --output public
-                \\
-                \\
-            , .{});
-        };
+        // No path means "the docs folder people already have". A repository
+        // keeps that tree in `docs/`; a command run from inside the tree
+        // itself has no such subdirectory, and the current directory is it.
+        const content = chooseContentDir(content_dir_path, contentDirExists(io, "docs"));
 
         // Without --base the content directory is also the base, which is the
         // common case: you point the command at your docs folder and it just
@@ -224,7 +225,7 @@ pub const DocsOptions = struct {
         // deserialization without ever being read.
         const cfg: root.Config = .{
             .zine_version = options.version,
-            .mode = "docs",
+            .mode = if (ebook) "ebook" else "docs",
             .site = .{ .simple = .{
                 .title = site_title,
                 .lang = lang,
@@ -251,6 +252,46 @@ pub const DocsOptions = struct {
         };
     }
 };
+
+/// The content directory for `zdoc docs` when the caller may have omitted it.
+///
+/// An explicit path always wins, including a path that does not exist yet:
+/// that failure belongs to the build, which can name the directory the user
+/// actually typed. With no path, `docs/` is the conventional tree and `.` is
+/// the tree you are already standing in.
+fn chooseContentDir(explicit: ?[]const u8, docs_dir_exists: bool) []const u8 {
+    if (explicit) |dir| return dir;
+    if (docs_dir_exists) return "docs";
+    return ".";
+}
+
+/// Whether `name` in the current directory can be opened as a directory.
+///
+/// A file of that name is not a documentation tree, so it counts as absent
+/// and the command falls back to the current directory. Any other failure
+/// (permissions, I/O) is reported: silently switching trees would build the
+/// wrong site.
+fn contentDirExists(io: Io, name: []const u8) bool {
+    var cwd = Io.Dir.cwd();
+    var dir = cwd.openDir(io, name, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return false,
+        else => fatal.dir(name, err),
+    };
+    dir.close(io);
+    return true;
+}
+
+test "chooseContentDir prefers an explicit path" {
+    try std.testing.expectEqualStrings("guide", chooseContentDir("guide", true));
+}
+
+test "chooseContentDir uses docs when that directory exists" {
+    try std.testing.expectEqualStrings("docs", chooseContentDir(null, true));
+}
+
+test "chooseContentDir falls back to the current directory" {
+    try std.testing.expectEqualStrings(".", chooseContentDir(null, false));
+}
 
 /// Derives a human-readable site title from the content directory name,
 /// turning `my-project-docs` into `My Project Docs`.
@@ -308,14 +349,21 @@ fn normalizeUrlPrefix(
 }
 
 const help_message =
-    \\Usage: zdoc docs <dir> [OPTIONS]
+    \\Usage: zdoc docs [dir] [OPTIONS]
+    \\       zdoc ebook [dir] [OPTIONS]
     \\
-    \\Build a documentation website from a directory of Markdown files, with no
-    \\configuration file required. Layouts, styles and behaviour come from the
-    \\built-in theme.
+    \\Build a website from a directory of Markdown files, with no configuration
+    \\file required. `zdoc docs` is a documentation site. `zdoc ebook` is the
+    \\same tree read as a book: the root page is the cover, and each other
+    \\page links to the previous and next chapter. Layouts and styles come
+    \\from the built-in theme.
     \\
     \\Positional arguments:
-    \\  <dir>               Directory containing the Markdown files
+    \\  [dir]               Directory containing the Markdown files.
+    \\                      Defaults to 'docs/' when that directory exists,
+    \\                      otherwise the current directory.
+    \\                      e.g. zdoc docs
+    \\                           zdoc docs ~/projects/myapp/docs --output public
     \\
     \\Command specific options:
     \\  --title, -t TITLE   Site title (defaults to the directory name)

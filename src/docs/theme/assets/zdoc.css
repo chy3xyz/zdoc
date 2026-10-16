@@ -1,52 +1,65 @@
-/*! zdoc default theme — a VitePress-style documentation layout.
+/*! zdoc default theme.
  *
- * Three columns: a fixed sidebar of the current section's pages, the content,
- * and a sticky table of contents. Dark mode follows the OS preference.
+ * The article is the page: a serif reading column, and a sans-serif rail for
+ * finding things. Dark mode follows the OS preference.
  */
 
 :root {
-  --sidebar-width: 280px;
-  --toc-width: 240px;
-  --content-max: 780px;
+  --sidebar-width: 260px;
+  --toc-width: 220px;
+  --content-max: 40rem;
 
-  --bg: #ffffff;
-  --bg-soft: #f7f8fa;
-  --bg-code: #f6f8fa;
-  --border: #e2e5e9;
-  --text: #24292e;
-  --text-dim: #57606a;
-  --accent: #3451b2;
-  --accent-soft: #e6ecff;
-  --warn-bg: #fff8e6;
-  --warn-border: #f0d68a;
-  --warn-text: #7a5c00;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC",
+    "Noto Serif CJK SC", serif;
+  --font-sans: "Avenir Next", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Noto Sans CJK SC", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Sarasa Mono SC", Menlo, Consolas,
+    monospace;
+
+  --bg: #f3f5f7;
+  --bg-soft: #e6ebf0;
+  --bg-code: #e9eef2;
+  --border: #d0d7e0;
+  --text: #1b2430;
+  --text-dim: #5a6878;
+  --accent: #0f5f6b;
+  --accent-fill: #0f5f6b;
+  --accent-soft: #d7ebee;
+  --warn-bg: #f8f1e4;
+  --warn-border: #c4a36a;
+  --warn-text: #6d5420;
+  --danger-bg: #f8e8e6;
+  --danger-border: #b55248;
 
   /* Syntax tokens, keyed to the class names emitted by src/highlight.zig. */
   --tk-comment: #6a737d;
-  --tk-keyword: #cf222e;
-  --tk-string: #0a3069;
-  --tk-number: #0550ae;
-  --tk-function: #8250df;
-  --tk-type: #953800;
-  --tk-variable: #24292e;
-  --tk-operator: #0550ae;
-  --tk-builtin: #116329;
-  --tk-constant: #0550ae;
+  --tk-keyword: #9f3040;
+  --tk-string: #0f5f6b;
+  --tk-number: #1d4e89;
+  --tk-function: #6b4c8a;
+  --tk-type: #8a4b12;
+  --tk-variable: #1b2430;
+  --tk-operator: #1d4e89;
+  --tk-builtin: #1d6b45;
+  --tk-constant: #1d4e89;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1117;
-    --bg-soft: #161b22;
-    --bg-code: #161b22;
-    --border: #30363d;
-    --text: #e6edf3;
-    --text-dim: #9198a1;
-    --accent: #7d9bff;
-    --accent-soft: #1c2b52;
-    --warn-bg: #2a2410;
-    --warn-border: #6b5518;
-    --warn-text: #e3c268;
+    --bg: #14191d;
+    --bg-soft: #1c2329;
+    --bg-code: #1c2329;
+    --border: #313a44;
+    --text: #e6ecef;
+    --text-dim: #9aa6b2;
+    --accent: #7ec8c4;
+    --accent-fill: #14656e;
+    --accent-soft: #1a3032;
+    --warn-bg: #2a2418;
+    --warn-border: #8a7040;
+    --warn-text: #e3c98a;
+    --danger-bg: #2c1c1c;
+    --danger-border: #a85a52;
 
     --tk-comment: #8b949e;
     --tk-keyword: #ff7b72;
@@ -69,12 +82,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Helvetica, Arial,
-    sans-serif;
-  font-size: 16px;
+  font-family: var(--font-serif);
+  font-size: 17px;
   line-height: 1.7;
   -webkit-font-smoothing: antialiased;
+  text-wrap: pretty;
 }
 
 a {
@@ -108,8 +120,10 @@ a:hover {
 .sidebar {
   width: var(--sidebar-width);
   flex: 0 0 var(--sidebar-width);
+  background: var(--bg-soft);
   border-right: 1px solid var(--border);
-  padding: 20px 12px 48px;
+  padding: 28px 16px 48px;
+  font-family: var(--font-sans);
   position: sticky;
   top: 0;
   height: 100vh;
@@ -132,10 +146,11 @@ a:hover {
 }
 
 .sidebar__title {
-  font-size: 16px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  margin: 0 8px 2px;
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 8px 16px;
   display: block;
   color: var(--text);
   text-decoration: none;
@@ -147,10 +162,8 @@ a:hover {
 
 .sidebar__group {
   margin: 22px 8px 8px;
-  font-size: 11px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-dim);
 }
 
@@ -197,9 +210,7 @@ a:hover {
 .sidebar__label {
   color: var(--text);
   font-weight: 600;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 13px;
   margin-top: 12px;
 }
 
@@ -268,19 +279,18 @@ a:hover {
 .toc {
   width: var(--toc-width);
   flex: 0 0 var(--toc-width);
-  padding: 40px 24px 48px 0;
+  padding: 48px 24px 48px 0;
   position: sticky;
   top: 0;
   height: 100vh;
   overflow-y: auto;
+  font-family: var(--font-sans);
   font-size: 13px;
 }
 
 .toc__title {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
   color: var(--text-dim);
   margin: 0 0 10px;
 }
@@ -330,15 +340,14 @@ a:hover {
 
 .doc h1 {
   margin-top: 0;
-  font-size: 2em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--border);
+  font-size: 2.25rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
 .doc h2 {
-  font-size: 1.5em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--border);
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
 }
 
 .doc h3 { font-size: 1.25em; }
@@ -402,14 +411,18 @@ a:hover {
 
 .doc th,
 .doc td {
-  border: 1px solid var(--border);
-  padding: 6px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 16px 8px 0;
   text-align: left;
+  vertical-align: top;
 }
 
 .doc th {
-  background: var(--bg-soft);
+  font-family: var(--font-sans);
+  font-size: 0.85em;
   font-weight: 600;
+  color: var(--text-dim);
 }
 
 .doc img {
@@ -418,27 +431,23 @@ a:hover {
 
 .doc :not(pre) > code {
   background: var(--bg-code);
-  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.1em 0.35em;
-  font-size: 0.875em;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  font-size: 0.85em;
+  font-family: var(--font-mono);
 }
 
 .doc pre {
   background: var(--bg-code);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: 10px;
+  padding: 16px 18px;
   overflow-x: auto;
   line-height: 1.55;
 }
 
 .doc pre code {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
-  font-size: 0.875em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
   background: none;
   border: none;
   padding: 0;
@@ -671,28 +680,30 @@ pre.mermaid svg {
  */
 
 .hero {
-  padding: 64px 0 48px;
-  text-align: center;
+  padding: 88px 0 40px;
+  text-align: left;
 }
 
 .hero__name {
-  margin: 0 0 8px;
-  font-size: 48px;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
+  margin: 0 0 12px;
+  font-size: 64px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  font-weight: 600;
   border: 0;
 }
 
 .hero__text {
-  margin: 0 0 8px;
-  font-size: 24px;
+  margin: 0 0 10px;
+  font-size: 22px;
   font-weight: 500;
-  color: var(--text-dim);
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
 
 .hero__tagline {
-  margin: 0 auto;
-  max-width: 640px;
+  margin: 0;
+  max-width: 36rem;
   color: var(--text-dim);
 }
 
@@ -700,35 +711,47 @@ pre.mermaid svg {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  justify-content: center;
+  justify-content: flex-start;
   margin-top: 28px;
 }
 
 .hero__action {
   display: inline-block;
-  padding: 10px 22px;
+  padding: 10px 18px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 15px;
   font-weight: 600;
   text-decoration: none;
   color: var(--text);
-  background: var(--bg);
+  background: transparent;
 }
 
 .hero__action:hover {
   border-color: var(--accent);
   color: var(--accent);
+  text-decoration: none;
 }
 
+.hero__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The template cannot concatenate a theme class, so the first action is the
+   one that carries the weight. Later actions stay as quiet outlines. */
+.hero__actions .hero__action:first-child,
 .hero__action--brand {
   border-color: transparent;
-  color: #ffffff;
-  background: var(--accent);
+  color: #f4fafb;
+  background: var(--accent-fill);
 }
 
+.hero__actions .hero__action:first-child:hover,
 .hero__action--brand:hover {
-  color: #ffffff;
-  filter: brightness(1.1);
+  color: #f4fafb;
+  background: #0c4e58;
 }
 
 /* `.feature-grid` is the loop container: `:loop` repeats its children, so
@@ -736,27 +759,30 @@ pre.mermaid svg {
    what repeat. It is a grid so the cards lay themselves out. */
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-  margin-bottom: 48px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+  margin: 8px 0 56px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
 }
 
 .feature {
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-soft);
+  padding: 0;
+  background: transparent;
 }
 
 .feature__title {
   margin: 0 0 8px;
-  font-size: 17px;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   border: 0;
 }
 
 .feature__details {
   margin: 0;
   color: var(--text-dim);
+  font-size: 0.95rem;
 }
 
 /* The body of a home page sits below the feature cards and reads as an
@@ -765,9 +791,20 @@ pre.mermaid svg {
   margin: 0 auto;
 }
 
+@media (max-width: 800px) {
+  .feature-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+}
+
 @media (max-width: 640px) {
+  .hero {
+    padding-top: 56px;
+  }
+
   .hero__name {
-    font-size: 34px;
+    font-size: 44px;
   }
 
   .hero__text {
@@ -790,6 +827,144 @@ pre.mermaid svg {
   font-size: 14px;
 }
 
+/* The attribution line. Quieter than the date it can share the footer with,
+   because it is not information about the page: the name is dimmed and only
+   the link itself carries the accent, so the eye lands on the date first when
+   there is one. */
+.doc__powered {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+/* On a landing page the column is centered rather than left-aligned with the
+   document text, because there is no text to align with. */
+.doc__footer--home .doc__powered {
+  margin-top: 0;
+  text-align: left;
+}
+
+.doc__powered a {
+  color: var(--text-dim);
+  text-decoration-color: var(--border);
+}
+
+/* Hover is the only moment the line is meant to be noticed. */
+.doc__powered a:hover {
+  color: var(--text);
+  text-decoration-color: currentColor;
+}
+
+/* ------------------------------------------------------------------ ebook
+ *
+ * `zdoc ebook` renders the same tree as a book. The column is the article.
+ * The chapter list stays folded until the reader asks for it.
+ */
+
+.ebook {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 28px 24px 80px;
+}
+
+.ebook__bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 40px;
+}
+
+.ebook__home {
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.ebook__home:hover {
+  color: var(--accent);
+}
+
+.ebook__contents {
+  position: relative;
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+}
+
+.ebook__contents summary {
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.ebook__contents summary:hover {
+  color: var(--text);
+}
+
+/* The list is positioned against the header. A closed <details> does not
+   hide that box: the list stays in the page and can be activated, so a click
+   on the chapter lands on a different one. Hide it until the reader opens
+   Contents. */
+.ebook__contents:not([open]) ul {
+  display: none;
+}
+
+.ebook__contents ul {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  width: min(280px, 70vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.ebook__turn {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-sans);
+}
+
+.ebook__prev,
+.ebook__next {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 46%;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.ebook__next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.ebook__prev:hover,
+.ebook__next:hover {
+  color: var(--accent);
+}
+
+.ebook__turn-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.ebook__turn-title {
+  font-size: 1.05rem;
+}
+
 /* ------------------------------------------------------------------ search
  *
  * The input sits above the sidebar list. Results are absolutely positioned
@@ -807,9 +982,9 @@ pre.mermaid svg {
   padding: 7px 34px 7px 11px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: var(--bg-soft);
+  background: var(--bg);
   color: var(--text);
-  font: inherit;
+  font-family: var(--font-sans);
   font-size: 13.5px;
   transition: border-color 0.12s ease, background-color 0.12s ease;
 }
@@ -972,18 +1147,18 @@ pre.mermaid svg {
 
 .block.tip,
 .block.info {
-  border-left-color: #3b82f6;
-  background: #eff6ff;
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .block.warning {
-  border-left-color: #d97706;
+  border-left-color: var(--warn-border);
   background: var(--warn-bg);
 }
 
 .block.danger {
-  border-left-color: #dc2626;
-  background: #fef2f2;
+  border-left-color: var(--danger-border);
+  background: var(--danger-bg);
 }
 
 .block.note,
@@ -993,13 +1168,3 @@ pre.mermaid svg {
   border-left-color: var(--border);
 }
 
-@media (prefers-color-scheme: dark) {
-  .block.tip,
-  .block.info {
-    background: #0d1f38;
-  }
-
-  .block.danger {
-    background: #2d1416;
-  }
-}
