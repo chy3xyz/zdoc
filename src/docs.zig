@@ -583,10 +583,11 @@ fn exists(io: Io, dir: Io.Dir, name: []const u8) bool {
 }
 
 fn writeFile(io: Io, dir: Io.Dir, name: []const u8, src: []const u8) !void {
-    // `writeFile` will not create parent directories, and the layouts include
-    // one nested under `templates/`.
-    if (std.mem.lastIndexOfScalar(u8, name, '/')) |slash| {
-        var sub = dir.createDirPathOpen(io, name[0..slash], .{}) catch |err| return err;
+    // `writeFile` will not create parent directories. Layouts nest under
+    // `templates/`, and vendored mermaid chunks use the platform separator,
+    // so the parent is whatever `dirname` reports.
+    if (std.fs.path.dirname(name)) |parent| {
+        var sub = dir.createDirPathOpen(io, parent, .{}) catch |err| return err;
         defer sub.close(io);
     }
     dir.writeFile(io, .{ .sub_path = name, .data = src }) catch |err| return err;
