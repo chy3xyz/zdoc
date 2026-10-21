@@ -20,6 +20,44 @@ struct Config {
     /// User-defined properties that you can reference from SuperHTML via
     /// '$site.custom'.
     custom: {:}any,
+    /// Documentation theme chrome. A docs or ebook build also reads these
+    /// settings from `.zdoc-theme/site.yaml`, which replaces this value.
+    chrome: ?Chrome,
+}
+
+struct Chrome {
+    /// File name of an image in the theme directory, shown beside the title.
+    logo: ?bytes,
+    /// Plain text for the page footer.
+    footer: ?bytes,
+    /// Link to the page source. `{path}` is replaced with the page's path
+    /// relative to the content directory.
+    edit_url: ?bytes,
+    /// Site title. A `--title` flag replaces this.
+    title: ?bytes,
+    /// BCP 47 language tag. A `--lang` flag replaces this.
+    lang: ?bytes,
+    /// URL prefix, the same shape as `--url-prefix`.
+    url_prefix: ?bytes,
+    /// Vendored mermaid file or dist directory, relative to the directory
+    /// `zdoc` is run from.
+    mermaid: ?bytes,
+    /// Links to other languages. Each entry is a name plus a URL prefix.
+    locales: []LocaleLink,
+    /// Links to other published versions. Each build is separate.
+    versions: []VersionLink,
+
+    struct LocaleLink {
+        name: bytes,
+        /// URL prefix of that locale, such as `/` or `/en/`.
+        prefix: bytes,
+    }
+
+    struct VersionLink {
+        name: bytes,
+        /// URL prefix of that version, such as `/` or `/docs/v0/`.
+        prefix: bytes,
+    }
 }
 
 struct SuperMd {
