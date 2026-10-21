@@ -1,6 +1,6 @@
 .{
     .name = .zdoc,
-    .version = "0.16.2",
+    .version = "0.17.0",
     .fingerprint = 0x5cc6bb924ce7c891,
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
@@ -30,8 +30,8 @@
             .hash = "superhtml-0.7.0-Y7MdPGykJgDenn3V9JQFolYt1ZQF8QPlHTdjD4wFS6yq",
         },
         .zeit = .{
-            .url = "git+https://github.com/rockorager/zeit#ed64c36035fe44d6372c20cbcd447b0090687167",
-            .hash = "zeit-0.10.0-dev-5I6bk4i0AgANIwpoMN_iBL-OGEpyDuInvQLfrPe_FVb1",
+            .url = "git+https://github.com/rockorager/zeit?ref=v0.10.0#06bb7b462b4218770fb5438ebe6b0c0c5ef18888",
+            .hash = "zeit-0.10.0-5I6bkxS-AgAaI3lI3RsXsWnPw7sMCqJKoFnSB8_QRAoo",
         },
         .flow_syntax = .{
             .url = "git+https://github.com/kristoff-it/flow-syntax#b42c3e985215e88a8faa260cbf7eb248822c339c",
