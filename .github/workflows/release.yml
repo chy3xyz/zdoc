@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # setupReleaseStep cross-compiles every target archive from one host.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: mlugg/setup-zig@v2
+
+      # build.zig archives non-zip targets with the gtar binary name.
+      - name: Provide gtar
+        run: sudo ln -sfn "$(command -v tar)" /usr/local/bin/gtar
+
+      - name: Build release archives
+        run: zig build release -Dslim-release
+
+      - name: Checksums
+        working-directory: zig-out/releases
+        run: sha256sum *.zip *.tar.xz > SHA256SUMS
+
+      - name: Upload archives
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            zig-out/releases/aarch64-macos.zip
+            zig-out/releases/aarch64-macos-slim.zip
+            zig-out/releases/aarch64-linux-musl.tar.xz
+            zig-out/releases/aarch64-linux-musl-slim.tar.xz
+            zig-out/releases/aarch64-freebsd.15.0.tar.xz
+            zig-out/releases/aarch64-netbsd.tar.xz
+            zig-out/releases/aarch64-windows.zip
+            zig-out/releases/x86_64-macos.zip
+            zig-out/releases/x86_64-macos-slim.zip
+            zig-out/releases/x86_64-linux-musl.tar.xz
+            zig-out/releases/x86_64-linux-musl-slim.tar.xz
+            zig-out/releases/x86_64-freebsd.15.0.tar.xz
+            zig-out/releases/x86_64-netbsd.tar.xz
+            zig-out/releases/x86_64-windows.zip
+            zig-out/releases/SHA256SUMS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The formula stays pinned until HOMEBREW_TAP_DEPLOY_KEY can push to
+      # chy3xyz/homebrew-tap. A missing key is not a failed release.
+      - name: Update Homebrew formula
+        env:
+          TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -z "$TAP_KEY" ]; then
+            echo "HOMEBREW_TAP_DEPLOY_KEY is unset; the formula stays pinned."
+            exit 0
+          fi
+          gh release download "$TAG" --pattern SHA256SUMS
+          key="$RUNNER_TEMP/tap_key"
+          printf '%s\n' "$TAP_KEY" > "$key"
+          chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:chy3xyz/homebrew-tap.git "$RUNNER_TEMP/tap"
+          python3 .github/scripts/bump_zdoc_formula.py \
+            "$RUNNER_TEMP/tap/Formula/zdoc.rb" \
+            "$TAG" \
+            SHA256SUMS
+          git -C "$RUNNER_TEMP/tap" add Formula/zdoc.rb
+          if git -C "$RUNNER_TEMP/tap" diff --cached --quiet; then
+            echo "formula already matches $TAG"
+            exit 0
+          fi
+          git -C "$RUNNER_TEMP/tap" \
+            -c user.email="github-actions[bot]@users.noreply.github.com" \
+            -c user.name="github-actions[bot]" \
+            commit -m "zdoc: $TAG"
+          git -C "$RUNNER_TEMP/tap" push

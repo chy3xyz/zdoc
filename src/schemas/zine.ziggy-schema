@@ -84,8 +84,9 @@ union Site {
         ///
         image_size_attributes: ?bool,
     /// Documentation mode only: path to a locally vendored mermaid ESM
-    /// bundle, relative to the base directory. When set, diagrams render
-    /// without network access instead of being fetched from a CDN.
+    /// bundle, or to the `dist` directory that contains it, relative to the
+    /// base directory. When set, diagrams render without network access
+    /// instead of being fetched from a CDN.
     mermaid: ?bytes,
     }
 

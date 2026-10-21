@@ -129,7 +129,7 @@ fn writeUrl(
     lastmod: ?GitDates.Date,
 ) Io.Writer.Error!void {
     try writer.writeAll("  <url><loc>/");
-    try writer.writeAll(loc);
+    try escape(writer, loc);
     try writer.writeAll("</loc>");
     if (lastmod) |date| {
         var buf: [10]u8 = undefined;

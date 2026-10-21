@@ -115,29 +115,29 @@ pub const Item = struct {
     };
 };
 
-    /// A section heading, a section with no page to link to, and a page are
-    /// three different things visually, and a flat list carrying only an
-    /// indent cannot tell a reader which is which.
-    const Class = struct {
-        const section = [_][]const u8{
-            "sidebar__section sidebar__section--d0",
-            "sidebar__section sidebar__section--d1",
-            "sidebar__section sidebar__section--d2",
-            "sidebar__section sidebar__section--d3",
-        };
-        const label = [_][]const u8{
-            "sidebar__label sidebar__label--d0",
-            "sidebar__label sidebar__label--d1",
-            "sidebar__label sidebar__label--d2",
-            "sidebar__label sidebar__label--d3",
-        };
-        const item = [_][]const u8{
-            "sidebar__item sidebar__item--d0",
-            "sidebar__item sidebar__item--d1",
-            "sidebar__item sidebar__item--d2",
-            "sidebar__item sidebar__item--d3",
-        };
+/// A section heading, a section with no page to link to, and a page are
+/// three different things visually, and a flat list carrying only an
+/// indent cannot tell a reader which is which.
+const Class = struct {
+    const section = [_][]const u8{
+        "sidebar__section sidebar__section--d0",
+        "sidebar__section sidebar__section--d1",
+        "sidebar__section sidebar__section--d2",
+        "sidebar__section sidebar__section--d3",
     };
+    const label = [_][]const u8{
+        "sidebar__label sidebar__label--d0",
+        "sidebar__label sidebar__label--d1",
+        "sidebar__label sidebar__label--d2",
+        "sidebar__label sidebar__label--d3",
+    };
+    const item = [_][]const u8{
+        "sidebar__item sidebar__item--d0",
+        "sidebar__item sidebar__item--d1",
+        "sidebar__item sidebar__item--d2",
+        "sidebar__item sidebar__item--d3",
+    };
+};
 
 /// The class for one sidebar entry, given what kind of entry it is.
 ///
@@ -172,8 +172,8 @@ pub fn build(
     // subfolders still shows up.
     var dirs: std.AutoHashMapUnmanaged(Path, *Dir) = .empty;
     const root_dir = try arena.create(Dir);
-    root_dir.* = .{ .path = @enumFromInt(0), .name = "" };
-    try dirs.put(arena, @as(Path, @enumFromInt(0)), root_dir);
+    root_dir.* = .{ .path = @fromBackingInt(@intCast(0)), .name = "" };
+    try dirs.put(arena, @as(Path, @fromBackingInt(@intCast(0))), root_dir);
 
     for (v.pages.items) |*p| {
         if (!p._parse.active) continue;
@@ -220,7 +220,7 @@ fn ensureDir(
     var prefix: std.ArrayListUnmanaged(StringTable.String) = .empty;
     defer prefix.deinit(arena);
 
-    var path: Path = @enumFromInt(0);
+    var path: Path = @fromBackingInt(@intCast(0));
     for (components) |comp| {
         try prefix.append(arena, comp);
         path = v.path_table.get(prefix.items) orelse return error.OutOfMemory;
@@ -238,7 +238,7 @@ fn ensureDir(
             // the entry for the prefix without the last component, which was
             // created on the previous iteration (or is the root).
             const parent_path = if (prefix.items.len == 1)
-                @as(Path, @enumFromInt(0))
+                @as(Path, @fromBackingInt(@intCast(0)))
             else
                 v.path_table.get(prefix.items[0 .. prefix.items.len - 1]) orelse
                     return error.OutOfMemory;
@@ -327,8 +327,18 @@ fn flatten(
         fn lessThan(ctx: *const Variant, lhs: *const Page, rhs: *const Page) bool {
             _ = ctx;
             // `order` is the one thing a frontmatter can say about order; when
-            // it is absent the title decides, as it always did.
-            if (lhs.order != rhs.order) return lhs.order < rhs.order;
+            // it is absent the title decides, as it always did. Unordered
+            // pages must sort after ordered ones, not before: `no_order` is
+            // `minInt(i64)`, which would otherwise win every comparison.
+            const lhs_order = if (lhs.order == Page.no_order)
+                std.math.maxInt(i64)
+            else
+                lhs.order;
+            const rhs_order = if (rhs.order == Page.no_order)
+                std.math.maxInt(i64)
+            else
+                rhs.order;
+            if (lhs_order != rhs_order) return lhs_order < rhs_order;
             if (std.mem.eql(u8, lhs.title, rhs.title)) {
                 return lhs._scan.page_id < rhs._scan.page_id;
             }
@@ -352,7 +362,7 @@ fn flatten(
             .dir => |child_path| try emitDir(arena, v, dirs, child_path, depth, out, true),
             .page => |p| {
                 if (p.hidden) continue;
-                try out.append(arena, Item.init(p.title, p, depth, false));
+                try out.append(arena, Item.init(pageLabel(p.sidebar_label, p.title), p, depth, false));
             },
         };
         return;
@@ -365,7 +375,7 @@ fn flatten(
 
     for (dir.pages.items) |p| {
         if (p.hidden) continue;
-        try out.append(arena, Item.init(p.title, p, depth, false));
+        try out.append(arena, Item.init(pageLabel(p.sidebar_label, p.title), p, depth, false));
     }
 }
 
@@ -403,6 +413,12 @@ fn pageName(v: *const Variant, page: *const Page) []const u8 {
     return components[components.len - 1].slice(&v.string_table);
 }
 
+/// The label a page shows in the sidebar: its frontmatter `sidebar_label`
+/// when set, and its title otherwise.
+fn pageLabel(sidebar_label: []const u8, title: []const u8) []const u8 {
+    return if (sidebar_label.len != 0) sidebar_label else title;
+}
+
 fn emitDir(
     arena: Allocator,
     v: *const Variant,
@@ -426,11 +442,14 @@ fn emitDir(
         if (ip.hidden) return;
     }
 
-    // A directory's index page titles the section far better than the
+    // A directory's index page labels the section far better than the
     // directory name does: `ai/` holds a README whose H1 explains what the
     // section is for. Only fall back to the directory name when there is
     // no index page to ask.
-    const label = if (child.index_page) |ip| ip.title else child.name;
+    const label = if (child.index_page) |ip|
+        pageLabel(ip.sidebar_label, ip.title)
+    else
+        stripOrderPrefix(child.name);
     try out.append(arena, Item.init(label, child.index_page, depth, true));
     try flatten(arena, v, dirs, child, depth + 1, out, reading);
 }
@@ -440,6 +459,17 @@ fn emitDir(
 /// Leading digit runs compare as numbers, so `2-foo` precedes `10-foo`. Only
 /// the leading run is numeric -- an author writing `01-guide/` means to order
 /// the directory, not to renumber the words after it.
+/// `01-guide/` is a directory named for its position. The prefix orders the
+/// tree; it is not part of the label a reader should see.
+fn stripOrderPrefix(name: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < name.len and std.ascii.isDigit(name[i])) i += 1;
+    if (i > 0 and i < name.len and (name[i] == '-' or name[i] == '_')) {
+        return name[i + 1 ..];
+    }
+    return name;
+}
+
 fn naturalLess(lhs: []const u8, rhs: []const u8) bool {
     const l_digits = digitRun(lhs);
     const r_digits = digitRun(rhs);
@@ -544,4 +574,9 @@ test "a section with an index page is the only kind that links" {
         "sidebar__label sidebar__label--d0",
         classFor(true, false, 0),
     );
+}
+
+test "sidebar_label overrides the title, and empty means unset" {
+    try testing.expectEqualStrings("Label", pageLabel("Label", "Title"));
+    try testing.expectEqualStrings("Title", pageLabel("", "Title"));
 }

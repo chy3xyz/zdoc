@@ -47,7 +47,31 @@
 	     leaving it uncredited would be the one page where the credit is
 	     most visible by its absence. No date line: the hero already fills
 	     the space above it. -->
+	<nav class="doc__pager" aria-label="Pages">
+		<ctx :if="$page.prevChapter?()">
+			<a class="doc__pager-prev" href="$if.link()">
+				<span class="doc__pager-label">Previous</span>
+				<span class="doc__pager-title" :text="$if.title"></span>
+			</a>
+		</ctx>
+		<ctx :if="$page.nextChapter?()">
+			<a class="doc__pager-next" href="$if.link()">
+				<span class="doc__pager-label">Next</span>
+				<span class="doc__pager-title" :text="$if.title"></span>
+			</a>
+		</ctx>
+	</nav>
 	<footer class="doc__footer doc__footer--home">
+		<button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">Dark</button>
+		<ctx :if="$page.hasVersionSwitcher()">
+			<div class="version-switch" :html="$page.versionSwitcher()"></div>
+		</ctx>
+		<ctx :if="$page.hasLocaleSwitcher()">
+			<nav class="locale-switch" aria-label="Languages" :html="$page.localeSwitcher()"></nav>
+		</ctx>
+		<ctx :if="$site.hasFooter()">
+			<p class="doc__note" :text="$site.footer()"></p>
+		</ctx>
 		<p class="doc__powered">Built with <a href="https://github.com/chy3xyz/zdoc">zdoc</a></p>
 	</footer>
 </div>

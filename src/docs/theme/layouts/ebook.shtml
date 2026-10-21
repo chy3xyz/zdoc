@@ -9,7 +9,19 @@
 <div class="layout layout--bare" id="main">
 <div class="ebook">
 	<header class="ebook__bar">
-		<a class="ebook__home" href="$site.index().link()" :text="$site.title"></a>
+		<a class="ebook__home" href="$site.index().link()">
+			<ctx :if="$site.hasLogo()">
+				<img class="sidebar__logo" alt="" src="$site.asset($site.logo()).link()">
+			</ctx>
+			<span :text="$site.title"></span>
+		</a>
+		<ctx :if="$page.hasLocaleSwitcher()">
+			<nav class="locale-switch" aria-label="Languages" :html="$page.localeSwitcher()"></nav>
+		</ctx>
+		<button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">Dark</button>
+		<ctx :if="$page.hasVersionSwitcher()">
+			<div class="version-switch" :html="$page.versionSwitcher()"></div>
+		</ctx>
 		<details class="ebook__contents">
 			<summary>Contents</summary>
 			<ul class="sidebar__list">
@@ -26,6 +38,18 @@
 	</header>
 
 	<article class="doc ebook__body" :html="$page.content()"></article>
+	<ctx :if="$page.footnotes?()">
+		<section class="doc__footnotes">
+			<ol :loop="$if">
+				<li id="$loop.it.def_id">
+					<ctx :html="$loop.it.html()"></ctx>
+					<ctx :loop="$loop.it.ref_ids">
+						<a class="footnote-backref" href="$loop.it.prefix('#')" :html="$loop.idx"></a>
+					</ctx>
+				</li>
+			</ol>
+		</section>
+	</ctx>
 
 	<nav class="ebook__turn">
 		<ctx :if="$page.prevChapter?()">
@@ -43,6 +67,12 @@
 	</nav>
 
 	<footer class="doc__footer">
+		<ctx :if="$site.hasFooter()">
+			<p class="doc__note" :text="$site.footer()"></p>
+		</ctx>
+		<ctx :if="$page.hasEditLink()">
+			<p class="doc__edit"><a href="$page.editLink()">Edit this page</a></p>
+		</ctx>
 		<p class="doc__powered">Built with <a href="https://github.com/chy3xyz/zdoc">zdoc</a></p>
 	</footer>
 </div>

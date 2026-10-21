@@ -17,6 +17,7 @@ const root = @import("../root.zig");
 const fatal = @import("../fatal.zig");
 const render = @import("../render.zig");
 const docs = @import("../docs.zig");
+const site_meta = @import("../docs/site_meta.zig");
 const Signature = @import("doctypes.zig").Signature;
 const DateTime = @import("DateTime.zig");
 const context = @import("../context.zig");
@@ -73,6 +74,10 @@ custom: ziggy.Dynamic = .{ .kv = .empty },
 /// It is a sentinel rather than an optional because the template value type
 /// has no representation for `?i64`.
 order: i64 = no_order,
+/// Documentation-mode sidebar label from frontmatter, shown instead of the
+/// title where the page or its section appears in the sidebar. Empty when the
+/// author did not set one.
+sidebar_label: []const u8 = "",
 /// Documentation mode: this page is not built at all.
 ///
 /// Distinct from `hidden`, which only keeps a page out of the sidebar. An
@@ -421,7 +426,14 @@ pub fn parse(
         0,
     ) catch |err| fatal.file(path_bytes, err);
 
-    const trimmed_left = std.mem.trimStart(u8, full_src, &std.ascii.whitespace);
+    // A UTF-8 BOM is not part of the document. Without stripping it the
+    // opening `---` is not recognized and YAML is rendered as prose.
+    const bom = "\xEF\xBB\xBF";
+    const without_bom = if (std.mem.startsWith(u8, full_src, bom))
+        full_src[bom.len..]
+    else
+        full_src;
+    const trimmed_left = std.mem.trimStart(u8, without_bom, &std.ascii.whitespace);
     if (std.mem.trimEnd(u8, trimmed_left, &std.ascii.whitespace).len == 0) {
         p.* = .{
             .date = .{ ._raw = .{ .unix = 0 } },
@@ -637,22 +649,36 @@ fn parseDocsFrontmatter(
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     const arena = arena_state.allocator();
 
-    const fm_src = full_src[fm_start..body_start.fm_end];
+    // An unclosed block must not swallow the page. Report it and treat the
+    // rest of the file as Markdown so the content stays visible.
+    if (!body_start.closed) {
+        std.log.warn(
+            "frontmatter has no closing '---'; rendering the rest of the file as Markdown",
+            .{},
+        );
+    }
+    const body_offset = if (body_start.closed) body_start.offset else fm_start;
+    const fm_end = if (body_start.closed) body_start.fm_end else fm_start;
+
+    const fm_src = full_src[fm_start..fm_end];
     const result = docs.frontmatter.parse(arena, fm_src) catch |err| switch (err) {
         error.OutOfMemory => fatal.oom(),
     };
     const f = result.fields;
+    const aliases = normalizeAliases(arena, f.aliases) catch fatal.oom();
 
     p.* = .{
         .title = f.title orelse "",
         .description = f.description orelse "",
         .layout = f.layout orelse "",
         .tags = f.tags,
+        .aliases = aliases,
         .draft = f.draft orelse false,
-        .order = f.order orelse no_order,
+        .order = f.order orelse f.sidebar_position orelse no_order,
+        .sidebar_label = f.sidebar_label orelse "",
         .hidden = f.hidden orelse false,
         .exclude = f.exclude orelse false,
-                ._parse = .{
+        ._parse = .{
             .active = (f.draft orelse false) == false or drafts,
             .forbid_subsections = false,
             .arena = arena_state.state,
@@ -662,7 +688,7 @@ fn parseDocsFrontmatter(
             // Rendering slices the body out of `full_src` at this offset, so it
             // has to describe the same block the reader consumed.
             .ziggy_doc = .{
-                .end = @intCast(body_start.offset),
+                .end = @intCast(body_offset),
                 .lines = @intCast(std.mem.countScalar(u8, fm_src, '\n')),
             },
             .ast = undefined,
@@ -673,7 +699,7 @@ fn parseDocsFrontmatter(
     // SuperMD has no syntax for them and its `setDirective` can only attach a
     // directive to a node that already exists -- there is no way to build the
     // blockquote these need after the fact.
-    const body_src = full_src[body_start.offset..];
+    const body_src = full_src[body_offset..];
     const rewritten = docs.Containers.rewrite(arena, body_src) catch fatal.oom();
     const md_src = if (rewritten) |r| r else body_src;
 
@@ -717,6 +743,46 @@ fn parseDocsFrontmatter(
             });
         }
     }
+}
+
+/// Rewrites docs-mode aliases into the absolute, file-shaped paths that
+/// `root.zig` turns into output URLs.
+///
+/// Aliases are authored the way VitePress spells them: site paths such as
+/// `/old/` or `/old/page`, where a trailing directory becomes its
+/// `index.html`. `root.zig` prefixes a relative alias with the page's own URL
+/// and asserts that an alias has no backslash, has a file extension, and has
+/// no dot in any directory component. Every alias is therefore made absolute,
+/// and one that cannot satisfy those assertions is dropped instead of
+/// aborting the build.
+fn normalizeAliases(
+    arena: Allocator,
+    aliases: []const []const u8,
+) Allocator.Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+
+    for (aliases) |raw| {
+        const body = std.mem.trimStart(u8, std.mem.trim(u8, raw, " \t"), "/");
+        if (body.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, body, '\\') != null) continue;
+
+        var buf: std.ArrayList(u8) = .empty;
+        try buf.append(arena, '/');
+        try buf.appendSlice(arena, body);
+        if (body[body.len - 1] == '/') {
+            try buf.appendSlice(arena, "index.html");
+        } else if (std.fs.path.extension(body).len == 0) {
+            try buf.appendSlice(arena, "/index.html");
+        }
+
+        const alias = try buf.toOwnedSlice(arena);
+        const dir = std.fs.path.dirnamePosix(alias) orelse "";
+        if (std.mem.indexOfScalar(u8, dir, '.') != null) continue;
+
+        try out.append(arena, alias);
+    }
+
+    return out.toOwnedSlice(arena);
 }
 
 /// Locates where a page's body begins, given the offset just past its opening
@@ -993,6 +1059,13 @@ pub const Fields = struct {
         \\
         \\Zero when the author did not set one, in which case the sidebar
         \\falls back to ordering by title.
+    ;
+    pub const sidebar_label =
+        \\Documentation mode: the label shown for this page or its section
+        \\in the sidebar, as set in the frontmatter.
+        \\
+        \\Empty when the author did not set one, in which case the sidebar
+        \\uses the page title.
     ;
     pub const hidden =
         \\Documentation mode: when true this page is left out of the
@@ -2450,6 +2523,197 @@ pub const Builtins = struct {
             const dates = ctx._meta.build.docs_git_dates;
             const vid = ctx.site._meta.variant_id;
             return Bool.init(vid < dates.len and dates[vid].get(src) != null);
+        }
+    };
+
+    pub const hasEditLink = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\True when `.zdoc-theme/site.yaml` sets `edit_url`.
+        ;
+        pub const examples =
+            \\<a :if="$page.hasEditLink()" href="$page.editLink()">Edit this page</a>
+        ;
+        pub fn call(
+            _: *const Page,
+            _: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return Bool.init(ctx.site._edit_url.len != 0);
+        }
+    };
+
+    pub const editLink = struct {
+        pub const signature: Signature = .{ .ret = .String };
+        pub const docs_description =
+            \\The `edit_url` template with `{path}` replaced by this page's
+            \\source path, relative to the content directory.
+        ;
+        pub const examples =
+            \\<a href="$page.editLink()">Edit this page</a>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            if (ctx.site._edit_url.len == 0) return String.init("");
+
+            const src = p.sourcePath(
+                gpa,
+                &ctx._meta.build.variants[p._scan.variant_id],
+            ) catch return error.OutOfMemory;
+            defer gpa.free(src);
+
+            const href = site_meta.applyEditTemplate(gpa, ctx.site._edit_url, src) catch return error.OutOfMemory;
+            return String.init(href);
+        }
+    };
+
+    pub const hasLocaleSwitcher = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\True when `.zdoc-theme/site.yaml` lists locales.
+        ;
+        pub const examples =
+            \\<nav :if="$page.hasLocaleSwitcher()" :html="$page.localeSwitcher()"></nav>
+        ;
+        pub fn call(
+            _: *const Page,
+            _: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return Bool.init(ctx.site._locale_links.len != 0);
+        }
+    };
+
+    pub const localeSwitcher = struct {
+        pub const signature: Signature = .{ .ret = .String };
+        pub const docs_description =
+            \\HTML links to this page under each locale prefix from
+            \\`.zdoc-theme/site.yaml`. The locale whose prefix matches the
+            \\site's `--url-prefix` is marked `aria-current="page"`.
+        ;
+        pub const examples =
+            \\<nav :html="$page.localeSwitcher()"></nav>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            const links = ctx.site._locale_links;
+            if (links.len == 0) return String.init("");
+
+            const v = &ctx._meta.build.variants[p._scan.variant_id];
+            var rel_buf: Writer.Allocating = .init(gpa);
+            rel_buf.writer.print("{f}", .{
+                p._scan.url.fmt(&v.string_table, &v.path_table, null, true),
+            }) catch return error.OutOfMemory;
+            const rel = rel_buf.written();
+
+            const current = switch (ctx.site._meta.kind) {
+                .simple => |prefix| prefix,
+                .multi => |loc| loc.output_prefix_override orelse "",
+            };
+
+            var html: Writer.Allocating = .init(gpa);
+            const w = &html.writer;
+            for (links, 0..) |loc, i| {
+                if (i != 0) w.writeAll(" ") catch return error.OutOfMemory;
+                w.writeAll("<a class=\"locale-switch__link\"") catch return error.OutOfMemory;
+                if (site_meta.prefixEqual(current, loc.prefix)) {
+                    w.writeAll(" aria-current=\"page\"") catch return error.OutOfMemory;
+                }
+                w.writeAll(" href=\"") catch return error.OutOfMemory;
+                var href: Writer.Allocating = .init(gpa);
+                site_meta.writeLocaleHref(&href.writer, loc.prefix, rel) catch return error.OutOfMemory;
+                site_meta.appendEscaped(w, href.written()) catch return error.OutOfMemory;
+                w.writeAll("\">") catch return error.OutOfMemory;
+                site_meta.appendEscaped(w, loc.name) catch return error.OutOfMemory;
+                w.writeAll("</a>") catch return error.OutOfMemory;
+            }
+            return String.init(html.written());
+        }
+    };
+
+    pub const hasVersionSwitcher = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\True when `.zdoc-theme/site.yaml` lists versions.
+        ;
+        pub const examples =
+            \\<nav :if="$page.hasVersionSwitcher()" :html="$page.versionSwitcher()"></nav>
+        ;
+        pub fn call(
+            _: *const Page,
+            _: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return Bool.init(ctx.site._version_links.len != 0);
+        }
+    };
+
+    pub const versionSwitcher = struct {
+        pub const signature: Signature = .{ .ret = .String };
+        pub const docs_description =
+            \\HTML `<select>` of this page under each version prefix from
+            \\`.zdoc-theme/site.yaml`. The version whose prefix matches the
+            \\site's `--url-prefix` is marked `selected`.
+        ;
+        pub const examples =
+            \\<div :html="$page.versionSwitcher()"></div>
+        ;
+        pub fn call(
+            p: *const Page,
+            gpa: Allocator,
+            ctx: *const context.Root,
+            args: []const Value,
+        ) context.CallError!Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            const versions = ctx.site._version_links;
+            if (versions.len == 0) return String.init("");
+
+            const v = &ctx._meta.build.variants[p._scan.variant_id];
+            var rel_buf: Writer.Allocating = .init(gpa);
+            rel_buf.writer.print("{f}", .{
+                p._scan.url.fmt(&v.string_table, &v.path_table, null, true),
+            }) catch return error.OutOfMemory;
+            const rel = rel_buf.written();
+
+            const current = switch (ctx.site._meta.kind) {
+                .simple => |prefix| prefix,
+                .multi => |loc| loc.output_prefix_override orelse "",
+            };
+
+            var html: Writer.Allocating = .init(gpa);
+            const w = &html.writer;
+            w.writeAll("<select class=\"version-switch__select\" aria-label=\"Version\">") catch return error.OutOfMemory;
+            for (versions) |ver| {
+                w.writeAll("<option value=\"") catch return error.OutOfMemory;
+                var href: Writer.Allocating = .init(gpa);
+                site_meta.writeLocaleHref(&href.writer, ver.prefix, rel) catch return error.OutOfMemory;
+                site_meta.appendEscaped(w, href.written()) catch return error.OutOfMemory;
+                w.writeAll("\"") catch return error.OutOfMemory;
+                if (site_meta.prefixEqual(current, ver.prefix)) {
+                    w.writeAll(" selected") catch return error.OutOfMemory;
+                }
+                w.writeAll(">") catch return error.OutOfMemory;
+                site_meta.appendEscaped(w, ver.name) catch return error.OutOfMemory;
+                w.writeAll("</option>") catch return error.OutOfMemory;
+            }
+            w.writeAll("</select>") catch return error.OutOfMemory;
+            return String.init(html.written());
         }
     };
 

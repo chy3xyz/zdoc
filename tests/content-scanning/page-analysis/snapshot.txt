@@ -187,11 +187,11 @@ content/index.smd:41:1: error: missing site asset
 |    ![](/bad.jpg) //wrong
 |    ^^^^^^^^^^^^^
 
-content/index.smd:42:1: error: missing site asset
+content/index.smd:42:1: error: missing page asset
 |    ![](./bad.jpg) //wrong
 |    ^^^^^^^^^^^^^^
 
-content/index.smd:43:1: error: missing site asset
+content/index.smd:43:1: error: missing page asset
 |    ![](bad.jpg) // wrong
 |    ^^^^^^^^^^^^
 

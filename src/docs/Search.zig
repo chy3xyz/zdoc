@@ -34,6 +34,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const supermd = @import("supermd");
+const cmark = supermd.c;
 const Variant = @import("../Variant.zig");
 const context = @import("../context.zig");
 const Page = context.Page;
@@ -97,7 +98,7 @@ pub const Builder = struct {
             //
             // Without this the index is roughly six times larger than it needs
             // to be: 1.8M postings for 1715 records, rather than one per
-            // record and trigram pair that actually occurs.
+            // record and bigram pair that actually occurs.
             const list = entry.value_ptr;
             if (list.items.len != 0 and list.items[list.items.len - 1] == idx) continue;
             try list.append(self.arena, idx);
@@ -107,9 +108,9 @@ pub const Builder = struct {
     /// Serializes the index as JSON.
     ///
     /// Records come first so the reader can show results as they arrive, and
-    /// the trigram table follows. Every index in a posting list points into
+    /// the bigram table follows. Every index in a posting list points into
     /// `records`, which is what keeps the file small: the text itself is stored
-    /// once, not once per trigram.
+    /// once, not once per bigram.
     pub fn render(self: *const Builder, w: *std.Io.Writer) std.Io.Writer.Error!void {
         try w.writeAll("{\"r\":[");
         for (self.records.items, 0..) |rec, i| {
@@ -210,6 +211,9 @@ pub fn build(
     for (v.pages.items) |*p| {
         if (!p._parse.active) continue;
         if (p._parse.status != .parsed) continue;
+        // `hidden` means "published but unlisted": keep it out of the
+        // sitemap and out of on-site search for the same reason.
+        if (p.hidden) continue;
 
         const url = try pageUrl(arena, v, p, url_prefix);
 
@@ -219,12 +223,21 @@ pub fn build(
         var section_anchor: []const u8 = "";
         var body: std.ArrayListUnmanaged([]const u8) = .empty;
 
+        var in_table_cell = false;
         var it = supermd.Ast.Iter.init(p._parse.ast.md.root);
         defer it.deinit();
 
         while (it.next()) |ev| {
-            if (ev.dir != .enter) continue;
             const node = ev.node;
+
+            // Table cells are cmark extension nodes. Track their depth before
+            // the enter-only guard below, because the exit event is what
+            // clears the flag.
+            if (@backingInt(node.nodeType()) == cmark.CMARK_NODE_TABLE_CELL) {
+                in_table_cell = ev.dir == .enter;
+            }
+
+            if (ev.dir != .enter) continue;
 
             switch (node.nodeType()) {
                 .HEADING => {
@@ -245,10 +258,18 @@ pub fn build(
                 // every node would read the same paragraph once for the
                 // paragraph and again for each run inside it, which is what
                 // turned a 1.6MB corpus into a 27MB index.
-                .PARAGRAPH, .CODE_BLOCK, .BLOCK_QUOTE, .ITEM, .FOOTNOTE_DEFINITION => {
+                .PARAGRAPH, .CODE_BLOCK => {
                     if (node.renderPlaintext()) |text| {
                         try body.append(arena, try trim(arena, text));
                     } else |_| {}
+                },
+                .TEXT, .CODE => {
+                    // Table cells are cmark extension nodes, and the plaintext
+                    // renderer does not know how to walk them. Collect their
+                    // inline text directly while inside a cell.
+                    if (in_table_cell) {
+                        try body.append(arena, node.literal() orelse "");
+                    }
                 },
                 else => {},
             }
@@ -289,9 +310,10 @@ fn pageUrl(
         true,
     )});
 
-    var url = aw.written();
-    while (url.len > 1 and url[url.len - 1] == '/') url = url[0 .. url.len - 1];
-    return url;
+    // Keep the trailing slash. Pages are published as `<path>/index.html`,
+    // so the canonical URL is `/guide/foo/`; dropping the slash makes hosts
+    // that do not redirect return a 404.
+    return aw.written();
 }
 
 /// The anchor a heading will be linked by, or empty when it has none.
@@ -302,7 +324,10 @@ fn pageUrl(
 fn headingAnchor(node: supermd.Node) []const u8 {
     const dir = node.getDirective() orelse return "";
     return switch (dir.kind) {
-        .heading => dir.id orelse "",
+        // A plain heading and a section both carry the anchor in the
+        // directive id; section directives are what the author writes for
+        // headings that open a collapsible section.
+        .heading, .section => dir.id orelse "",
         else => "",
     };
 }

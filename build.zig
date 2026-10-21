@@ -279,13 +279,21 @@ pub fn build(b: *std.Build) !void {
     });
 
     const release = b.step("release", "Create release builds of Zine");
+    const slim_release = b.option(
+        bool,
+        "slim-release",
+        "Also build release archives without treesitter grammars (names end in -slim)",
+    ) orelse false;
     if (!preview and (std.mem.indexOf(u8, version, "dev") != null)) {
         release.dependOn(&b.addFail(b.fmt(
             "error: cannot build release of dev version ({s}), use -Dpreview to override",
             .{version},
         )).step);
     } else {
-        setupReleaseStep(b, release, version, translate_c);
+        setupReleaseStep(b, release, version, translate_c, true, "");
+        if (slim_release) {
+            setupReleaseStep(b, release, version, translate_c, false, "slim");
+        }
     }
 
     const shtml_docgen = b.addExecutable(.{
@@ -367,6 +375,9 @@ pub fn build(b: *std.Build) !void {
     setupSchemaCheck(b, target, zdoc_mod, test_step);
     try setupSnapshotTesting(b, target, zdoc_exe, test_step);
     setupUnitTests(b, test_step);
+    const docs_fixture = b.step("docs-fixture", "build the docs fixture and check its output");
+    setupDocsFixture(b, zdoc_exe, docs_fixture);
+    test_step.dependOn(docs_fixture);
 }
 
 /// The slugger is pure Zig with no dependency on the rest of the codebase, so
@@ -394,6 +405,54 @@ fn setupUnitTests(b: *std.Build, test_step: *std.Build.Step) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(frontmatter_tests).step);
+
+    // Heading markers and the optional docs chrome file are pure parsers.
+    const heading_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docs/heading_id.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(heading_tests).step);
+
+    const site_meta_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/docs/site_meta.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(site_meta_tests).step);
+}
+
+fn setupDocsFixture(
+    b: *std.Build,
+    zdoc_exe: *std.Build.Step.Compile,
+    step: *std.Build.Step,
+) void {
+    const out = b.path("zig-out/docs-fixture");
+    const run = b.addRunArtifact(zdoc_exe);
+    // The fixture's `mermaid:` path is relative to this directory, which is
+    // also the content root, so the theme install stays inside the fixture
+    // instead of the repository root.
+    run.setCwd(b.path("fixtures/docs"));
+    run.has_side_effects = true;
+    run.addArgs(&.{ "docs", ".", "--force", "--output" });
+    run.addDirectoryArg(out);
+
+    const check_exe = b.addExecutable(.{
+        .name = "check-docs-fixture",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build/check_docs_fixture.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+    const check = b.addRunArtifact(check_exe);
+    check.addDirectoryArg(out);
+    check.step.dependOn(&run.step);
+    step.dependOn(&check.step);
 }
 
 fn setupSchemaCheck(
@@ -574,8 +633,10 @@ fn setupReleaseStep(
     release_step: *std.Build.Step,
     version: []const u8,
     translate_c: *std.Build.Dependency,
+    highlight: bool,
+    archive_suffix: []const u8,
 ) void {
-    const targets: []const std.Target.Query = &.{
+    const all_targets = [_]std.Target.Query{
         .{ .cpu_arch = .aarch64, .os_tag = .macos },
         .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl },
         .{ .cpu_arch = .aarch64, .os_tag = .freebsd, .os_version_min = .{ .semver = .{ .major = 15, .minor = 0, .patch = 0 } } },
@@ -587,6 +648,16 @@ fn setupReleaseStep(
         .{ .cpu_arch = .x86_64, .os_tag = .netbsd },
         .{ .cpu_arch = .x86_64, .os_tag = .windows },
     };
+    // The slim archives are the ones Homebrew and the other common installs
+    // actually ship. Cross-compiling every BSD target twice is not what makes
+    // the download smaller.
+    const slim_targets = [_]std.Target.Query{
+        .{ .cpu_arch = .aarch64, .os_tag = .macos },
+        .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl },
+        .{ .cpu_arch = .x86_64, .os_tag = .macos },
+        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+    };
+    const targets: []const std.Target.Query = if (highlight) &all_targets else &slim_targets;
 
     // Io.Dir.cwd().createDirPath(b.graph.io, b.pathJoin(&.{
     //     b.install_prefix,
@@ -629,22 +700,19 @@ fn setupReleaseStep(
             .optimize = optimize,
         }).module("zeit");
 
-        const syntax = b.dependency("flow_syntax", .{
+        const syntax = if (highlight) b.dependency("flow_syntax", .{
             .target = target,
             .optimize = optimize,
-        });
-
-        const ts = syntax.builder.dependency("tree_sitter", .{
+        }) else null;
+        const treez = if (syntax) |s| s.builder.dependency("tree_sitter", .{
             .target = target,
             .optimize = optimize,
-        });
+        }).module("treez") else null;
 
         const wuffs = b.dependency("wuffs", .{
             .target = target,
             .optimize = optimize,
         });
-
-        const treez = ts.module("treez");
 
         const mime = b.dependency("mime", .{
             .target = target,
@@ -657,11 +725,11 @@ fn setupReleaseStep(
                 \\// module = zdoc
                 \\const std = @import("std");
                 \\pub const tsan = false;
-                \\pub const enable_treesitter = true;
+                \\pub const enable_treesitter = {};
                 \\pub const version = "{s}";
                 \\pub const log_scope_levels: []const std.log.ScopeLevel = &.{{}};
                 \\
-            , .{version}) catch unreachable;
+            , .{ highlight, version }) catch unreachable;
             break :blk options.createModule();
         };
 
@@ -687,8 +755,10 @@ fn setupReleaseStep(
         zdoc_exe_release.root_module.addImport("supermd", supermd);
         zdoc_exe_release.root_module.addImport("superhtml", superhtml);
         zdoc_exe_release.root_module.addImport("zeit", zeit);
-        zdoc_exe_release.root_module.addImport("syntax", syntax.module("syntax"));
-        zdoc_exe_release.root_module.addImport("treez", treez);
+        if (syntax) |s| {
+            zdoc_exe_release.root_module.addImport("syntax", s.module("syntax"));
+            zdoc_exe_release.root_module.addImport("treez", treez.?);
+        }
         zdoc_exe_release.root_module.addImport("tracy", tracy.module("tracy"));
         zdoc_exe_release.root_module.addImport("mime", mime.module("mime"));
         zdoc_exe_release.root_module.addImport("wuffs", wuffs.module("wuffs"));
@@ -722,9 +792,9 @@ fn setupReleaseStep(
 
         switch (t.os_tag.?) {
             .macos, .windows => {
-                const archive_name = b.fmt("{s}.zip", .{
-                    t.zigTriple(b.allocator) catch unreachable,
-                });
+                const triple = t.zigTriple(b.allocator) catch unreachable;
+                const stem = if (archive_suffix.len == 0) triple else b.fmt("{s}-{s}", .{ triple, archive_suffix });
+                const archive_name = b.fmt("{s}.zip", .{stem});
 
                 const zip = b.addSystemCommand(&.{
                     "zip",
@@ -744,9 +814,9 @@ fn setupReleaseStep(
                 ).step);
             },
             else => {
-                const archive_name = b.fmt("{s}.tar.xz", .{
-                    t.zigTriple(b.allocator) catch unreachable,
-                });
+                const triple = t.zigTriple(b.allocator) catch unreachable;
+                const stem = if (archive_suffix.len == 0) triple else b.fmt("{s}-{s}", .{ triple, archive_suffix });
+                const archive_name = b.fmt("{s}.tar.xz", .{stem});
 
                 const tar = b.addSystemCommand(&.{
                     "gtar",

@@ -16,6 +16,7 @@ const fatal = @import("../fatal.zig");
 const root = @import("../root.zig");
 const worker = @import("../worker.zig");
 const docs = @import("../docs.zig");
+const site_meta = @import("../docs/site_meta.zig");
 const Allocator = std.mem.Allocator;
 const BuildAsset = root.BuildAsset;
 
@@ -212,13 +213,37 @@ pub const DocsOptions = struct {
         const cwd = std.process.currentPathAlloc(io, gpa) catch fatal.oom();
         const base = base_dir_path orelse cwd;
 
-        const site_title = title orelse deriveTitle(gpa, content);
+        // `--theme-dir` replaces this. Otherwise a `.zdoc-theme/` next to the
+        // content root the build opens (`docs/.zdoc-theme` when the tree is
+        // `docs/`) is the override. One in the current directory is not the
+        // theme for a `docs/` tree. Absent means the built-in theme only.
+        if (theme_dir == null) {
+            theme_dir = themeDirBesideContent(io, gpa, base, content);
+        }
+
+        const chrome = loadChrome(io, gpa, base, theme_dir);
+
+        // A flag is the one-off. `site.yaml` is what the preview server can
+        // see, because that server builds with the same defaults as
+        // `zdoc docs` and has no place to put a flag.
+        const site_title = title orelse if (chrome.title.len != 0)
+            chrome.title
+        else
+            deriveTitle(gpa, content);
+        const site_lang = lang orelse if (chrome.lang.len != 0) chrome.lang else null;
+        const site_mermaid = mermaid orelse if (chrome.mermaid.len != 0) chrome.mermaid else null;
 
         // Normalize here rather than in `root.Config.validate`, because that
         // validation is shared with blog mode and rejects a leading slash
         // outright. Authors write `--url-prefix /docs/` far more often than
         // `--url-prefix docs`, and both have to mean the same thing.
-        const prefix = if (url_path_prefix) |raw| try normalizeUrlPrefix(gpa, raw) else null;
+        // A yaml value of `/` means the site root, which is the default.
+        const prefix = if (url_path_prefix) |raw|
+            try normalizeUrlPrefix(gpa, raw)
+        else if (chrome.url_prefix.len != 0 and std.mem.trim(u8, chrome.url_prefix, "/").len != 0)
+            try normalizeUrlPrefix(gpa, chrome.url_prefix)
+        else
+            null;
 
         // Docs mode overrides the layout and asset directories with the
         // built-in theme, so the values here are placeholders that satisfy
@@ -228,14 +253,15 @@ pub const DocsOptions = struct {
             .mode = if (ebook) "ebook" else "docs",
             .site = .{ .simple = .{
                 .title = site_title,
-                .lang = lang,
+                .lang = site_lang,
                 .host_url = "http://localhost/",
                 .url_path_prefix = prefix,
                 .layouts_dir_path = docs.theme_layouts_path,
                 .content_dir_path = content,
                 .assets_dir_path = docs.theme_assets_path,
-                .mermaid = mermaid,
+                .mermaid = site_mermaid,
             } },
+            .chrome = chrome,
         };
 
         return .{
@@ -279,6 +305,66 @@ fn contentDirExists(io: Io, name: []const u8) bool {
     };
     dir.close(io);
     return true;
+}
+
+/// `.zdoc-theme/` beside the content directory the build will open.
+///
+/// The path is relative to `base_path`, the same way the content path is.
+/// A missing directory, or a file of that name, is not an override.
+fn themeDirBesideContent(
+    io: Io,
+    gpa: Allocator,
+    base_path: []const u8,
+    content: []const u8,
+) ?[]const u8 {
+    const candidate = std.fs.path.join(gpa, &.{ content, docs.theme_dir }) catch fatal.oom();
+    var base = Io.Dir.cwd().openDir(io, base_path, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            gpa.free(candidate);
+            return null;
+        },
+        else => fatal.dir(base_path, err),
+    };
+    defer base.close(io);
+
+    var dir = base.openDir(io, candidate, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => {
+            gpa.free(candidate);
+            return null;
+        },
+        else => fatal.dir(candidate, err),
+    };
+    dir.close(io);
+    return candidate;
+}
+
+/// Reads `.zdoc-theme/site.yaml` when the theme directory exists.
+///
+/// A missing file is the common case and means the built-in chrome. A file
+/// that cannot be parsed stops the build: a typo in the only place an author
+/// sets the footer should not silently publish the site without it.
+fn loadChrome(
+    io: Io,
+    gpa: Allocator,
+    base: []const u8,
+    theme_dir: ?[]const u8,
+) site_meta.Chrome {
+    const dir = theme_dir orelse return .{};
+    const yaml_path = std.fs.path.join(gpa, &.{ base, dir, "site.yaml" }) catch fatal.oom();
+    const bytes = Io.Dir.cwd().readFileAllocOptions(
+        io,
+        yaml_path,
+        gpa,
+        .limited(1024 * 1024),
+        .of(u8),
+        0,
+    ) catch |err| switch (err) {
+        error.FileNotFound => return .{},
+        else => fatal.file(yaml_path, err),
+    };
+    const parsed = site_meta.parse(gpa, bytes) catch fatal.oom();
+    if (parsed.err) |msg| fatal.msg("error: {s}\n", .{msg});
+    return parsed.chrome;
 }
 
 test "chooseContentDir prefers an explicit path" {
@@ -356,7 +442,9 @@ const help_message =
     \\file required. `zdoc docs` is a documentation site. `zdoc ebook` is the
     \\same tree read as a book: the root page is the cover, and each other
     \\page links to the previous and next chapter. Layouts and styles come
-    \\from the built-in theme.
+    \\from the built-in theme. A '.zdoc-theme/' directory next to the
+    \\content can replace individual files, add custom.css, and carry
+    \\site.yaml for a logo, footer, edit link and language switcher.
     \\
     \\Positional arguments:
     \\  [dir]               Directory containing the Markdown files.
@@ -374,14 +462,20 @@ const help_message =
     \\                      (defaults to the current directory)
     \\  --output, -o DIR    Directory where to output the website
     \\                      (defaults to 'public/')
-    \\  --mermaid FILE       Vendored mermaid ESM bundle, for rendering
-    \\                      diagrams without network access
+    \\  --mermaid FILE|DIR  Vendored mermaid bundle or dist directory,
+    \\                      for rendering diagrams without network access
     \\  --url-prefix PATH  Serve the site from a subdirectory, for
     \\                      example when publishing to
     \\                      https://example.com/repo/docs/
     \\  --theme-dir DIR    Use theme files from DIR where present, and the
     \\                      built-in theme for the rest. Override a single
     \\                      stylesheet or layout without copying the rest.
+    \\                      '.zdoc-theme/' next to the content is picked up
+    \\                      automatically, and --theme-dir replaces that.
+    \\                      site.yaml and custom.css in that directory set
+    \\                      the logo, footer, edit link, languages, versions, colors,
+    \\                      title, language tag, URL prefix and mermaid path.
+    \\                      A command-line flag replaces the matching key.
     \\  --keep-theme        Do not overwrite theme files that already exist
     \\                      in '.zdoc-theme/', so local edits survive a
     \\                      rebuild

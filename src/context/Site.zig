@@ -20,6 +20,7 @@ const PathName = PathTable.PathName;
 const root = @import("../root.zig");
 const join = root.join;
 const docs = @import("../docs.zig");
+const site_meta = @import("../docs/site_meta.zig");
 const Signature = @import("doctypes.zig").Signature;
 
 host_url: []const u8,
@@ -28,6 +29,14 @@ title: []const u8,
 /// which is what `<html lang>` needs and what the docs mode assumes for a
 /// tree written in it.
 lang: []const u8 = "en",
+/// File name of a logo in the theme assets, or empty when the header is text.
+_logo: []const u8 = "",
+/// Plain-text footer line, or empty when the theme only shows attribution.
+_footer: []const u8 = "",
+/// Edit-link template. `{path}` is the page source path. Empty disables it.
+_edit_url: []const u8 = "",
+_locale_links: []const site_meta.LocaleLink = &.{},
+_version_links: []const site_meta.VersionLink = &.{},
 custom: ziggy.Dictionary(ziggy.Dynamic),
 _meta: struct {
     variant_id: u32,
@@ -129,6 +138,82 @@ pub const Builtins = struct {
                     .err = "only available in multilingual websites",
                 },
             };
+        }
+    };
+
+    pub const hasLogo = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\True when `.zdoc-theme/site.yaml` names a logo image.
+        ;
+        pub const examples =
+            \\<img :if="$site.hasLogo()" src="$site.asset($site.logo()).link()" alt="">
+        ;
+        pub fn call(
+            s: *const Site,
+            _: Allocator,
+            _: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return Bool.init(s._logo.len != 0);
+        }
+    };
+
+    pub const logo = struct {
+        pub const signature: Signature = .{ .ret = .String };
+        pub const docs_description =
+            \\File name of the logo in the theme assets directory.
+        ;
+        pub const examples =
+            \\$site.asset($site.logo()).link()
+        ;
+        pub fn call(
+            s: *const Site,
+            _: Allocator,
+            _: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return String.init(s._logo);
+        }
+    };
+
+    pub const hasFooter = struct {
+        pub const signature: Signature = .{ .ret = .Bool };
+        pub const docs_description =
+            \\True when `.zdoc-theme/site.yaml` sets a footer line.
+        ;
+        pub const examples =
+            \\<p :if="$site.hasFooter()" :text="$site.footer()"></p>
+        ;
+        pub fn call(
+            s: *const Site,
+            _: Allocator,
+            _: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return Bool.init(s._footer.len != 0);
+        }
+    };
+
+    pub const footer = struct {
+        pub const signature: Signature = .{ .ret = .String };
+        pub const docs_description =
+            \\The footer line from `.zdoc-theme/site.yaml`.
+        ;
+        pub const examples =
+            \\<p :text="$site.footer()"></p>
+        ;
+        pub fn call(
+            s: *const Site,
+            _: Allocator,
+            _: *const context.Root,
+            args: []const Value,
+        ) Value {
+            if (args.len != 0) return .{ .err = "expected 0 arguments" };
+            return String.init(s._footer);
         }
     };
 

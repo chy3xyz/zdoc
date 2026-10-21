@@ -71,14 +71,14 @@ pub const Simple = struct {
     ///    img { height: auto; }
     ///
     image_size_attributes: ?bool = null,
-    /// Documentation mode only: path to a locally vendored mermaid ESM bundle,
-    /// relative to the base directory. When set, diagrams render without
-    /// network access instead of being fetched from a CDN. Leave null to use
-    /// the CDN.
+    /// Documentation mode only: path to a locally vendored mermaid ESM
+    /// bundle, or to the `dist` directory that contains it, relative to the
+    /// base directory. When set, diagrams render without network access
+    /// instead of being fetched from a CDN. Leave null to use the CDN.
     ///
-    /// Download it once with:
-    ///   curl -o mermaid.esm.min.mjs \
-    ///     https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs
+    /// The published ESM entry imports a sibling `chunks/` directory, so the
+    /// simplest option is to install the package and point at its dist tree:
+    ///   zdoc docs --mermaid node_modules/mermaid/dist
     mermaid: ?[]const u8 = null,
 };
 
@@ -180,6 +180,9 @@ pub const Config = struct {
     mode: []const u8 = "blog",
     site: Site,
     custom: ziggy.Dictionary(ziggy.Dynamic) = .empty,
+    /// Documentation theme chrome from `.zdoc-theme/site.yaml`. Empty unless
+    /// that file was loaded for a docs or ebook build.
+    chrome: @import("docs/site_meta.zig").Chrome = .{},
 
     const config_file_basename = "zine.ziggy";
     pub const Search = union(enum) { auto, path: []const u8 };
@@ -549,6 +552,15 @@ pub const Config = struct {
         };
     }
 
+    /// The content tree's path, relative to the base directory in docs mode.
+    /// Used to find a `static/` passthrough directory next to the Markdown.
+    pub fn getContentDirPath(c: *const Config) []const u8 {
+        return switch (c.site) {
+            .simple => |s| s.content_dir_path,
+            .multilingual => |m| m.locales[0].content_dir_path,
+        };
+    }
+
     /// The locally vendored mermaid bundle, if the site has one.
     pub fn getMermaidPath(c: *const Config) ?[]const u8 {
         return switch (c.site) {
@@ -643,14 +655,17 @@ pub fn run(
     // Docs mode ships with a built-in theme. It is materialized before the
     // build is loaded so that the ordinary template and asset scanners pick
     // it up, leaving rendering with a single code path.
+    var vendored_mermaid: []const []const u8 = &.{};
     if (cfg.isDocs()) {
-        docs.installTheme(
+        vendored_mermaid = docs.installTheme(
             io,
             gpa,
             options.base_dir_path,
+            cfg.getContentDirPath(),
             cfg.getMermaidPath(),
             options.theme_dir,
             options.theme_keep_existing,
+            cfg.chrome.logo,
         ) catch |e| fatal.dir("built-in theme", e);
     }
 
@@ -733,9 +748,11 @@ pub fn run(
         }
 
         // These files are loaded by name at runtime rather than linked from a
-        // template, so nothing would ever mark them for installation.
-        if (build.cfg.isDocs() and build.cfg.getMermaidPath() != null) {
-            try build.docs_always_install.put(gpa, docs.mermaid_bundle_name, {});
+        // template, so nothing would ever mark them for installation. That
+        // includes every chunk of a vendored mermaid bundle, which the entry
+        // imports dynamically.
+        for (vendored_mermaid) |name| {
+            try build.docs_always_install.put(gpa, name, {});
         }
         if (build.cfg.isDocs()) {
             try build.docs_always_install.put(gpa, "404.html", {});
@@ -1024,6 +1041,11 @@ pub fn run(
                     .title = s.title,
                     .lang = s.lang orelse "en",
                     .custom = cfg.custom,
+                    ._logo = cfg.chrome.logo,
+                    ._footer = cfg.chrome.footer,
+                    ._edit_url = cfg.chrome.edit_url,
+                    ._locale_links = cfg.chrome.locales,
+                    ._version_links = cfg.chrome.versions,
                     ._meta = .{
                         .variant_id = 0,
                         .kind = .{ .simple = s.url_path_prefix orelse "" },
@@ -1437,7 +1459,11 @@ pub fn run(
             if (p._analysis.link_warnings.items.len == 0) continue;
 
             for (p._analysis.link_warnings.items) |err| {
-                link_warning_count += 1;
+                // `--strict` is about content that will not resolve on the
+                // published site. A fence in a language this build cannot
+                // highlight still renders as plain text, so it stays a
+                // warning but must not fail the strict gate.
+                if (err.kind != .unknown_language) link_warning_count += 1;
 
                 // Name the language in an unknown-language warning. The
                 // block still renders -- it falls back to unhighlighted text
@@ -1664,7 +1690,27 @@ pub fn run(
                     } else gop.value_ptr.*;
 
                     if (locales[vidx] != null) {
-                        @panic("TODO: a traslation key collision was found, make a nice error for it");
+                        const previous = locales[vidx].?;
+                        std.debug.print(
+                            \\{f}: error: translation key '{s}' is already used by {f}
+                            \\
+                        , .{
+                            p._scan.file.fmt(
+                                &v.string_table,
+                                &v.path_table,
+                                v.content_dir_path,
+                                "",
+                            ),
+                            tk,
+                            previous._scan.file.fmt(
+                                &v.string_table,
+                                &v.path_table,
+                                v.content_dir_path,
+                                "",
+                            ),
+                        });
+                        analysis_errors = true;
+                        continue;
                     }
 
                     locales[vidx] = p;
@@ -2178,6 +2224,43 @@ pub fn run(
                     std.mem.trimStart(u8, path, "/"),
                     .{},
                 ) catch |err| fatal.file(path, err);
+            }
+        }
+
+        // The copied 404.html is the theme's unprefixed fallback. Rewrite it
+        // once the prefix and language are known, unless the author replaced
+        // the file: a different body is theirs to keep.
+        if (build.cfg.isDocs()) {
+            const builtin_404 = @embedFile("docs/theme/assets/404.html");
+            const existing = site_assets_install_dir.readFileAllocOptions(
+                io,
+                "404.html",
+                arena,
+                .limited(1024 * 1024),
+                .of(u8),
+                0,
+            ) catch null;
+            if (existing == null or std.mem.eql(u8, existing.?, builtin_404)) {
+                const prefix = switch (cfg.site) {
+                    .simple => |s| s.url_path_prefix orelse "",
+                    .multilingual => "",
+                };
+                const lang = switch (cfg.site) {
+                    .simple => |s| s.lang orelse "en",
+                    .multilingual => "en",
+                };
+                const title = switch (cfg.site) {
+                    .simple => |s| s.title,
+                    .multilingual => "",
+                };
+                var not_found_aw: std.Io.Writer.Allocating = .init(arena);
+                docs.writeNotFound(&not_found_aw.writer, prefix, lang, title) catch |err| switch (err) {
+                    error.WriteFailed => fatal.oom(),
+                };
+                site_assets_install_dir.writeFile(io, .{
+                    .sub_path = "404.html",
+                    .data = not_found_aw.written(),
+                }) catch |e| fatal.file("404.html", e);
             }
         }
     }

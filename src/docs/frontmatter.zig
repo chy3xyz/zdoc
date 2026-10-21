@@ -149,7 +149,7 @@ fn resolveHeroPage(
     link: []const u8,
 ) ?*const PageT {
     const v = &ctx._meta.build.variants[ctx.site._meta.variant_id];
-    const index_html: STString = @enumFromInt(11);
+    const index_html: STString = @fromBackingInt(@intCast(11));
     std.debug.assert(v.string_table.get("index.html") == index_html);
 
     const ref = std.mem.trim(u8, std.mem.trimStart(u8, link, "/"), "/");
@@ -275,6 +275,9 @@ pub const Skipped = struct {
         unterminated_quote,
         document_marker,
         nested_under_scalar,
+        unknown_key,
+        duplicate_key,
+        invalid_value,
     };
 
     pub fn explain(c: Construct) []const u8 {
@@ -286,6 +289,9 @@ pub const Skipped = struct {
             .unterminated_quote => "frontmatter value has an unterminated quote",
             .document_marker => "frontmatter contains a '---' line, which ends the block early",
             .nested_under_scalar => "frontmatter scalar has an indented block under it, which was ignored",
+            .unknown_key => "frontmatter key is not supported and was ignored",
+            .duplicate_key => "frontmatter key appears more than once; the last value wins",
+            .invalid_value => "frontmatter value could not be parsed and was ignored",
         };
     }
 };
@@ -300,18 +306,27 @@ pub const Fields = struct {
     layout: ?[]const u8 = null,
     draft: ?bool = null,
     order: ?i64 = null,
+    /// VitePress compatibility: this page's label in the sidebar, shown
+    /// instead of its title there.
+    sidebar_label: ?[]const u8 = null,
+    /// VitePress compatibility: an alias for `order`. `order` wins when both
+    /// are present.
+    sidebar_position: ?i64 = null,
     hidden: ?bool = null,
     /// When true the page is not built at all. On a directory's index page
     /// this also removes the whole section below it.
     exclude: ?bool = null,
     tags: []const []const u8 = &.{},
+    /// VitePress compatibility: additional paths this page is published at.
+    aliases: []const []const u8 = &.{},
     hero: Hero = .{},
     features: []const Feature = &.{},
 
     pub fn has(_: Fields, key: []const u8) bool {
         const known = [_][]const u8{
-            "title",   "description", "layout", "draft",
-            "order",   "hidden",      "exclude", "tags",
+            "title",   "description",   "layout",           "draft",
+            "order",   "hidden",        "exclude",          "tags",
+            "aliases", "sidebar_label", "sidebar_position",
         };
         for (known) |k| {
             if (std.mem.eql(u8, key, k)) return true;
@@ -330,6 +345,9 @@ const Line = struct {
     indent: usize,
     /// Content with indentation and any trailing comment removed.
     text: []const u8,
+    /// The line exactly as written, without the trailing newline. Block
+    /// scalars are literal: comments and blank lines inside them are content.
+    raw: []const u8,
 };
 
 /// Splits `src` into lines, dropping blanks and comments.
@@ -370,6 +388,81 @@ const Reader = struct {
         return self.read();
     }
 
+    /// Reads a `|` / `>` block scalar. Unlike normal frontmatter lines, the
+    /// contents are literal: blank lines and `#` are preserved.
+    fn readBlockScalar(
+        self: *Reader,
+        key_indent: usize,
+        indicator: []const u8,
+    ) Allocator.Error![]const u8 {
+        const literal = indicator[0] == '|';
+        const strip = std.mem.indexOfScalar(u8, indicator, '-') != null;
+        const keep = std.mem.indexOfScalar(u8, indicator, '+') != null;
+
+        var lines: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer lines.deinit(self.arena);
+
+        // A previous `peek` may already have consumed the first line.
+        if (self.held) |line| {
+            self.held = null;
+            try lines.append(self.arena, line.raw);
+        }
+
+        while (self.pos < self.src.len) {
+            const start = self.pos;
+            const nl = std.mem.indexOfScalarPos(u8, self.src, start, '\n');
+            const end = if (nl) |p| p else self.src.len;
+            var raw = self.src[start..end];
+            if (raw.len > 0 and raw[raw.len - 1] == '\r') raw = raw[0 .. raw.len - 1];
+
+            var indent: usize = 0;
+            while (indent < raw.len and raw[indent] == ' ') indent += 1;
+            const blank = std.mem.trim(u8, raw, " \t").len == 0;
+            // The block ends at the first non-blank line that is not deeper
+            // than its key. Leave that line for the normal reader.
+            if (!blank and indent <= key_indent) break;
+            self.pos = if (nl) |p| p + 1 else self.src.len;
+            try lines.append(self.arena, raw);
+        }
+
+        // YAML takes the content indentation from the first non-blank line.
+        var content_indent: usize = key_indent + 2;
+        for (lines.items) |raw| {
+            if (std.mem.trim(u8, raw, " \t").len == 0) continue;
+            content_indent = 0;
+            while (content_indent < raw.len and raw[content_indent] == ' ') {
+                content_indent += 1;
+            }
+            break;
+        }
+
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        defer out.deinit(self.arena);
+
+        for (lines.items, 0..) |raw, idx| {
+            const line = if (raw.len >= content_indent) raw[content_indent..] else "";
+            if (literal) {
+                if (idx != 0) try out.append(self.arena, '\n');
+                try out.appendSlice(self.arena, line);
+            } else if (line.len == 0) {
+                try out.append(self.arena, '\n');
+            } else {
+                if (out.items.len != 0 and out.items[out.items.len - 1] != '\n') {
+                    try out.append(self.arena, ' ');
+                }
+                try out.appendSlice(self.arena, line);
+            }
+        }
+
+        if (!keep) {
+            while (out.items.len > 0 and out.items[out.items.len - 1] == '\n') {
+                _ = out.pop();
+            }
+            if (!strip and out.items.len != 0) try out.append(self.arena, '\n');
+        }
+        return try out.toOwnedSlice(self.arena);
+    }
+
     fn read(self: *Reader) Allocator.Error!?Line {
         while (self.pos < self.src.len) {
             const start = self.pos;
@@ -393,7 +486,7 @@ const Reader = struct {
             const text = std.mem.trim(u8, stripComment(raw[indent..]), " \t");
             if (text.len == 0) continue;
 
-            return .{ .indent = indent, .text = text };
+            return .{ .indent = indent, .text = text, .raw = raw };
         }
         return null;
     }
@@ -471,6 +564,7 @@ const Parser = struct {
     arena: Allocator,
     r: Reader,
     f: Fields = .{},
+    seen: std.StringHashMapUnmanaged(void) = .empty,
 
     fn next(self: *Parser) Allocator.Error!?Line {
         return self.r.next();
@@ -521,63 +615,48 @@ const Parser = struct {
     /// case the block has been consumed and the caller must not read it
     /// again.
     fn value(self: *Parser, indent: usize, head: []const u8) Allocator.Error!?[]const u8 {
-        // `|`, `|-`, `>`, `>-` are block scalar indicators: they mark the
-        // value as the indented block below rather than being the value. The
-        // difference between literal and folded is newlines versus spaces, and
-        // the chomping indicators are cosmetic here, so they all fold the same
-        // way.
-        if (head.len == 0 or isBlockIndicator(head)) {
+        // `|`, `|-`, `>`, `>+` are explicit block scalar indicators. The
+        // indicator is never the value itself, and the block below it is
+        // literal text, so the mapping heuristic must not run.
+        if (isBlockIndicator(head)) {
+            return try self.r.readBlockScalar(indent, head);
+        }
+
+        if (head.len == 0) {
             const line = (try self.r.peek()) orelse return "";
             if (line.indent <= indent) return "";
 
-            // A mapping or a list of mappings under a key is not a scalar.
+            // A mapping under a key is not a scalar.
             if (splitKey(listItem(line.text).rest) != null) {
                 try self.r.warn(.nested_under_scalar);
                 return null;
             }
 
-            return try self.blockScalar(indent);
+            // A bare key with an indented block is YAML's folded plain
+            // scalar. `>` matches that behavior.
+            return try self.r.readBlockScalar(indent, ">");
         }
 
         return try self.scalar(head);
     }
 
-    /// Consumes the indented lines below a key and folds them into one string.
-    fn blockScalar(self: *Parser, indent: usize) Allocator.Error!?[]const u8 {
-        var parts: std.ArrayList([]const u8) = .empty;
-        defer parts.deinit(self.arena);
-
-        while (try self.child(indent)) |line| {
-            const item = listItem(line.text);
-            // A list of mappings here means this is not a scalar after all.
-            if (item.is_item and splitKey(item.rest) != null) {
-                try self.r.warn(.nested_under_scalar);
-                return null;
-            }
-            try parts.append(self.arena, (try self.scalar(line.text)) orelse continue);
+    /// Reports the constructs that `scalar` would reject, without reading the
+    /// value.
+    ///
+    /// An unknown key never reaches `scalar`, so without this an author writing
+    /// `anchor: &base` under a key zdoc does not use would get no indication that
+    /// anything was dropped.
+    fn noteConstructs(self: *Parser, raw: []const u8) Allocator.Error!void {
+        if (raw.len == 0) return;
+        switch (raw[0]) {
+            '&' => try self.r.warn(.anchor),
+            '*' => try self.r.warn(.alias),
+            '{', '[' => try self.r.warn(.flow_collection),
+            else => {},
         }
-
-        if (parts.items.len == 0) return "";
-        return try std.mem.join(self.arena, " ", parts.items);
     }
 
-/// Reports the constructs that `scalar` would reject, without reading the
-/// value.
-///
-/// An unknown key never reaches `scalar`, so without this an author writing
-/// `anchor: &base` under a key zdoc does not use would get no indication that
-/// anything was dropped.
-fn noteConstructs(self: *Parser, raw: []const u8) Allocator.Error!void {
-    if (raw.len == 0) return;
-    switch (raw[0]) {
-        '&' => try self.r.warn(.anchor),
-        '*' => try self.r.warn(.alias),
-        '{', '[' => try self.r.warn(.flow_collection),
-        else => {},
-    }
-}
-
-/// Drops every line indented under `indent`, so an unrecognized block is
+    /// Drops every line indented under `indent`, so an unrecognized block is
     /// consumed as a unit rather than leaking keys back to the top level.
     fn skipBlock(self: *Parser, indent: usize) Allocator.Error!void {
         while (try self.r.peek()) |line| {
@@ -612,14 +691,20 @@ fn noteConstructs(self: *Parser, raw: []const u8) Allocator.Error!void {
         if (std.mem.eql(u8, pair.key, "hero")) return self.hero(indent);
         if (std.mem.eql(u8, pair.key, "features")) return self.features(indent);
         if (std.mem.eql(u8, pair.key, "tags")) return self.tags(indent, pair.rest);
+        if (std.mem.eql(u8, pair.key, "aliases")) return self.aliases(indent, pair.rest);
 
         // An unknown key is skipped as a whole. The check has to come before
         // the value is read: `value` consumes a nested block, and for a key we
         // do not use there is nothing to assign it to.
         if (!self.f.has(pair.key)) {
+            try self.r.warn(.unknown_key);
             try self.noteConstructs(pair.rest);
             return self.skipBlock(indent);
         }
+
+        const seen = try self.seen.getOrPut(self.arena, pair.key);
+        if (seen.found_existing) try self.r.warn(.duplicate_key);
+        seen.value_ptr.* = {};
 
         const v = (try self.value(indent, pair.rest)) orelse return;
 
@@ -630,21 +715,54 @@ fn noteConstructs(self: *Parser, raw: []const u8) Allocator.Error!void {
         } else if (std.mem.eql(u8, pair.key, "layout")) {
             self.f.layout = v;
         } else if (std.mem.eql(u8, pair.key, "draft")) {
-            self.f.draft = boolean(v);
+            self.f.draft = boolean(v) orelse blk: {
+                try self.r.warn(.invalid_value);
+                break :blk null;
+            };
         } else if (std.mem.eql(u8, pair.key, "hidden")) {
-            self.f.hidden = boolean(v);
+            self.f.hidden = boolean(v) orelse blk: {
+                try self.r.warn(.invalid_value);
+                break :blk null;
+            };
         } else if (std.mem.eql(u8, pair.key, "exclude")) {
-            self.f.exclude = boolean(v);
+            self.f.exclude = boolean(v) orelse blk: {
+                try self.r.warn(.invalid_value);
+                break :blk null;
+            };
         } else if (std.mem.eql(u8, pair.key, "order")) {
-            self.f.order = std.fmt.parseInt(i64, v, 10) catch null;
+            self.f.order = std.fmt.parseInt(i64, v, 10) catch blk: {
+                try self.r.warn(.invalid_value);
+                break :blk null;
+            };
+        } else if (std.mem.eql(u8, pair.key, "sidebar_label")) {
+            self.f.sidebar_label = v;
+        } else if (std.mem.eql(u8, pair.key, "sidebar_position")) {
+            self.f.sidebar_position = std.fmt.parseInt(i64, v, 10) catch blk: {
+                try self.r.warn(.invalid_value);
+                break :blk null;
+            };
         }
     }
 
     fn tags(self: *Parser, indent: usize, head: []const u8) Allocator.Error!void {
+        self.f.tags = try self.scalarList(indent, head);
+    }
+
+    fn aliases(self: *Parser, indent: usize, head: []const u8) Allocator.Error!void {
+        self.f.aliases = try self.scalarList(indent, head);
+    }
+
+    /// Reads a list of scalars written either as an inline comma-separated
+    /// value or as an indented `- item` list.
+    fn scalarList(
+        self: *Parser,
+        indent: usize,
+        head: []const u8,
+    ) Allocator.Error![]const []const u8 {
         var list: std.ArrayList([]const u8) = .empty;
 
         if (head.len != 0) {
-            // `tags: a, b` is not YAML, but it is a common slip and harmless
+            // `key: a, b` is not YAML, but it is a common slip and harmless
             // to accept as a convenience.
             var it = std.mem.splitScalar(u8, head, ',');
             while (it.next()) |raw| {
@@ -660,7 +778,7 @@ fn noteConstructs(self: *Parser, raw: []const u8) Allocator.Error!void {
             }
         }
 
-        self.f.tags = try list.toOwnedSlice(self.arena);
+        return try list.toOwnedSlice(self.arena);
     }
 
     fn hero(self: *Parser, indent: usize) Allocator.Error!void {
@@ -787,7 +905,6 @@ pub fn parse(arena: Allocator, src: []const u8) Allocator.Error!Result {
 
 const testing = std.testing;
 
-
 test "scalars, quoted and bare" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -810,9 +927,9 @@ test "a colon inside a value does not split the key" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const r = try parse(arena_state.allocator(),
-        \\link: https://example.com/x
+        \\description: https://example.com/x
     );
-    try testing.expect(r.fields.title == null);
+    try testing.expectEqualStrings("https://example.com/x", r.fields.description.?);
     try testing.expectEqual(@as(usize, 0), r.skipped.len);
 }
 
@@ -840,6 +957,34 @@ test "list of scalars" {
     try testing.expectEqual(@as(usize, 2), r.fields.tags.len);
     try testing.expectEqualStrings("alpha", r.fields.tags[0]);
     try testing.expectEqualStrings("beta", r.fields.tags[1]);
+}
+
+test "aliases inline list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\aliases: /old, /older/
+    );
+    try testing.expectEqual(@as(usize, 2), r.fields.aliases.len);
+    try testing.expectEqualStrings("/old", r.fields.aliases[0]);
+    try testing.expectEqualStrings("/older/", r.fields.aliases[1]);
+    try testing.expectEqual(@as(usize, 0), r.skipped.len);
+}
+
+test "aliases item list" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\aliases:
+        \\  - /old
+        \\  - /older/
+        \\title: T
+    );
+    try testing.expectEqual(@as(usize, 2), r.fields.aliases.len);
+    try testing.expectEqualStrings("/old", r.fields.aliases[0]);
+    try testing.expectEqualStrings("/older/", r.fields.aliases[1]);
+    try testing.expectEqualStrings("T", r.fields.title.?);
+    try testing.expectEqual(@as(usize, 0), r.skipped.len);
 }
 
 test "hero with actions" {
@@ -920,7 +1065,7 @@ test "unsupported constructs are skipped, never fatal" {
     try testing.expect(r.skipped.len >= 2);
 }
 
-test "block scalar folds indented lines" {
+test "block scalar | preserves newlines" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const r = try parse(arena_state.allocator(),
@@ -929,8 +1074,89 @@ test "block scalar folds indented lines" {
         \\  second line
         \\title: T
     );
-    try testing.expectEqualStrings("first line second line", r.fields.description.?);
+    try testing.expectEqualStrings("first line\nsecond line\n", r.fields.description.?);
     try testing.expectEqualStrings("T", r.fields.title.?);
+}
+
+test "block scalar > folds lines" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\description: >
+        \\  first line
+        \\  second line
+    );
+    try testing.expectEqualStrings("first line second line\n", r.fields.description.?);
+}
+
+test "block scalar keeps hashes and blank lines" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\description: |
+        \\  color: #fff
+        \\
+        \\  width: 10
+    );
+    try testing.expectEqualStrings("color: #fff\n\nwidth: 10\n", r.fields.description.?);
+}
+
+test "unknown keys are reported" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\sidebar_icon: Other
+        \\title: T
+    );
+    try testing.expectEqualStrings("T", r.fields.title.?);
+    try testing.expectEqual(@as(usize, 1), r.skipped.len);
+    try testing.expectEqual(Skipped.Construct.unknown_key, r.skipped[0].construct);
+}
+
+test "sidebar_label is read as a scalar" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\sidebar_label: "Getting Started"
+        \\title: Start
+    );
+    try testing.expectEqualStrings("Getting Started", r.fields.sidebar_label.?);
+    try testing.expectEqualStrings("Start", r.fields.title.?);
+    try testing.expectEqual(@as(usize, 0), r.skipped.len);
+}
+
+test "sidebar_position is an alias for order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\sidebar_position: 4
+    );
+    try testing.expectEqual(@as(i64, 4), r.fields.sidebar_position.?);
+    try testing.expect(r.fields.order == null);
+    try testing.expectEqual(@as(usize, 0), r.skipped.len);
+}
+
+test "order wins over sidebar_position" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\order: 2
+        \\sidebar_position: 7
+    );
+    try testing.expectEqual(@as(i64, 2), r.fields.order.?);
+    try testing.expectEqual(@as(i64, 7), r.fields.sidebar_position.?);
+    try testing.expectEqual(@as(usize, 0), r.skipped.len);
+}
+
+test "an invalid sidebar_position is reported and ignored" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const r = try parse(arena_state.allocator(),
+        \\sidebar_position: soon
+    );
+    try testing.expect(r.fields.sidebar_position == null);
+    try testing.expectEqual(@as(usize, 1), r.skipped.len);
+    try testing.expectEqual(Skipped.Construct.invalid_value, r.skipped[0].construct);
 }
 
 test "empty block yields nothing, not a failure" {

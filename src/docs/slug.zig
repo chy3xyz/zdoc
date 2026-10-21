@@ -25,6 +25,7 @@
 //! occurrence keeps the base, later ones get `-1`, `-2`, and so on.
 
 const std = @import("std");
+const case_table = @import("case_table.zig");
 const cat_table = @import("category_table.zig");
 
 const category_ranges = cat_table.category_ranges;
@@ -56,44 +57,16 @@ fn isVariationSelector(cp: u21) bool {
         (cp >= 0xE0100 and cp <= 0xE01EF);
 }
 
-/// Lowercase a single codepoint, handling the ranges `std.ascii.toLower`
-/// cannot. Full Unicode case folding is overkill for slugs; this covers ASCII
-/// plus Latin-1/Latin Extended-A, which is what real headings use.
-fn toLowerCodepoint(cp: u21) u21 {
-    if (cp < 0x80) {
-        const upper = cp >= 'A' and cp <= 'Z';
-        return cp + @as(u21, if (upper) 0x20 else 0);
+/// A sigma is final when the next non-case-ignorable codepoint is not cased.
+/// `rest` must be positioned just after `next`.
+fn isFinalSigma(next: ?u21, rest: std.unicode.Utf8Iterator) bool {
+    var it = rest;
+    var current = next;
+    while (current) |cp| {
+        if (!case_table.isCaseIgnorable(cp)) return !case_table.isCased(cp);
+        current = it.nextCodepoint();
     }
-    if (cp >= 0xC0 and cp <= 0xDE and cp != 0xD7) return cp + 0x20;
-    // Latin Extended-A: mostly even/odd pairs.
-    if (cp >= 0x100 and cp <= 0x137) return cp | 0x1;
-    if (cp >= 0x139 and cp <= 0x148) {
-        const odd = @intFromBool(@as(u21, cp) % 2 == 1);
-        return cp +% odd;
-    }
-    if (cp >= 0x14A and cp <= 0x177) return cp | 1;
-    if (cp == 0x178) return 0xFF;
-    if (cp >= 0x179 and cp <= 0x17E) {
-        const odd = @intFromBool(@as(u21, cp) % 2 == 1);
-        return cp +% odd;
-    }
-    if (cp >= 0x1CD and cp <= 0x1DC) {
-        const odd = @intFromBool(@as(u21, cp) % 2 == 1);
-        return cp +% odd;
-    }
-    // Greek.
-    if (cp >= 0x391 and cp <= 0x3A1) return cp + 0x20;
-    if (cp >= 0x3A3 and cp <= 0x3AB) return cp + 0x20;
-    // Cyrillic.
-    if (cp >= 0x400 and cp <= 0x40F) return cp + 0x50;
-    if (cp >= 0x460 and cp <= 0x481) return cp | 0x1;
-    if (cp >= 0x48A and cp <= 0x4BF) return cp | 1;
-    if (cp >= 0x4C1 and cp <= 0x4CE) {
-        const odd = @intFromBool(@as(u21, cp) % 2 == 1);
-        return cp +% odd;
-    }
-    if (cp >= 0x4D0 and cp <= 0x52F) return cp | 1;
-    return cp;
+    return true;
 }
 
 /// Slugifies heading text. The input should be the heading's plain text
@@ -108,23 +81,42 @@ pub fn slugify(
 
     var view = std.unicode.Utf8View.initUnchecked(text);
     var it = view.iterator();
-    while (it.nextCodepoint()) |cp| {
-        const lower = toLowerCodepoint(cp);
 
-        if (lower == ' ') {
-            try out.append(gpa, '-');
-            continue;
-        }
-        if (lower == '-' or lower == '_') {
-            try out.append(gpa, @intCast(lower));
-            continue;
-        }
-        if (isVariationSelector(lower)) continue;
-        if (!keepsCodepoint(lower)) continue;
+    var current = it.nextCodepoint();
+    while (current) |cp| {
+        const next = it.nextCodepoint();
 
-        var buf: [4]u8 = undefined;
-        const n = std.unicode.utf8Encode(lower, &buf) catch continue;
-        try out.appendSlice(gpa, buf[0..n]);
+        var lowered: [2]u21 = undefined;
+        var lowered_len: usize = 1;
+        if (cp == 0x130) {
+            // GitHub's `toLowerCase` emits a plain `i` plus a combining dot.
+            lowered[0] = 'i';
+            lowered[1] = 0x307;
+            lowered_len = 2;
+        } else if (cp == 0x3A3 and isFinalSigma(next, it)) {
+            lowered[0] = 0x3C2;
+        } else {
+            lowered[0] = case_table.toLower(cp);
+        }
+
+        for (lowered[0..lowered_len]) |lower| {
+            if (lower == ' ') {
+                try out.append(gpa, '-');
+                continue;
+            }
+            if (lower == '-' or lower == '_') {
+                try out.append(gpa, @intCast(lower));
+                continue;
+            }
+            if (isVariationSelector(lower)) continue;
+            if (!keepsCodepoint(lower)) continue;
+
+            var buf: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(lower, &buf) catch continue;
+            try out.appendSlice(gpa, buf[0..n]);
+        }
+
+        current = next;
     }
 
     return out.toOwnedSlice(gpa);
@@ -204,9 +196,54 @@ test "slugify: ascii basics" {
     try expectSlug("core----concepts", "Core    Concepts");
 }
 
+test "slugify: Cyrillic lowercases" {
+    try expectSlug("привет", "Привет");
+    try expectSlug("ёжик", "ЁЖИК");
+    try expectSlug("привет-мир", "Привет, Мир!");
+}
+
+test "slugify: Greek accented capitals lowercase" {
+    try expectSlug("άλφα", "Άλφα");
+    try expectSlug("άλφα", "ΆΛΦΑ");
+}
+
+test "slugify: Greek final sigma is context-sensitive" {
+    try expectSlug("ος", "ΟΣ");
+    try expectSlug("σοφια", "ΣΟΦΙΑ");
+    try expectSlug("σας", "ΣΑΣ");
+    // Digits and CJK are not cased, so the sigma is still final.
+    try expectSlug("ας2", "ΑΣ2");
+    try expectSlug("ας中", "ΑΣ中");
+    // Case-ignorable marks are skipped: a following cased letter keeps sigma
+    // non-final, while a following digit still makes it final.
+    try expectSlug("ασ\u{0301}β", "ΑΣ\u{0301}Β");
+    try expectSlug("ας\u{0301}2", "ΑΣ\u{0301}2");
+}
+
+test "slugify: dotted capital I matches GitHub's two-codepoint lowercase" {
+    try expectSlug("i\u{0307}stanbul", "İstanbul");
+}
+
+test "slugify: Latin Extended Additional lowercases" {
+    try expectSlug("ạậ", "ẠẬ");
+    try expectSlug("ốc", "Ốc");
+}
+
+test "slugify: CJK is kept and Latin is lowercased" {
+    try expectSlug("快速开始", "快速开始");
+    try expectSlug("安装-zdoc", "安装 Zdoc");
+}
+
+test "slugify: Armenian lowercases" {
+    try expectSlug("արև", "Արև");
+}
+
+test "slugify: fullwidth Latin lowercases" {
+    try expectSlug("ｈｅｌｌｏ-世界", "ＨＥＬＬＯ 世界");
+}
+
 test "slugify: punctuation is dropped, spaces become dashes" {
-    try expectSlug("14-升级注意zent-06--012--013----076--083--086",
-        "14. 升级注意（zent 0.6 → 0.12 → 0.13 → … → 0.76 → 0.83 → 0.86）");
+    try expectSlug("14-升级注意zent-06--012--013----076--083--086", "14. 升级注意（zent 0.6 → 0.12 → 0.13 → … → 0.76 → 0.83 → 0.86）");
 }
 
 test "slugify: leading dash survives (emoji stripped, space remains)" {

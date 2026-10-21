@@ -8,10 +8,13 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
     _ = gpa;
 
     const cmd: Command = .parse(args);
-    if (cmd.multilingual) @panic("TODO: multilingual init");
     enterDir(io, cmd.dir);
 
     const File = struct { path: []const u8, src: []const u8 };
+    const zine_src = if (cmd.multilingual)
+        std.fmt.comptimePrint(@embedFile("init/zine-multilingual.ziggy"), .{options.version})
+    else
+        std.fmt.comptimePrint(@embedFile("init/zine.ziggy"), .{options.version});
     const files = [_]File{
         .{
             .path = ".zine.ziggy-schema",
@@ -19,7 +22,7 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
         },
         .{
             .path = "zine.ziggy",
-            .src = std.fmt.comptimePrint(@embedFile("init/zine.ziggy"), .{options.version}),
+            .src = zine_src,
         },
         .{
             .path = "content/.smd.ziggy-schema",
@@ -116,32 +119,36 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
     };
 
     for (files) |file| {
-        const dirname = std.fs.path.dirnamePosix(file.path);
-        const basename = std.fs.path.basenamePosix(file.path);
-
-        const base_dir = if (dirname) |dn|
-            Io.Dir.cwd().createDirPathOpen(io, dn, .{}) catch |err| fatal.dir(dn, err)
-        else
-            Io.Dir.cwd();
-
-        const f = base_dir.createFile(io, basename, .{
-            .exclusive = true,
-        }) catch |err| switch (err) {
-            else => fatal.file(basename, err),
-            error.PathAlreadyExists => {
-                std.debug.print(
-                    "WARNING: '{s}' already exists, skipping.\n",
-                    .{file.path},
-                );
-                continue;
-            },
-        };
-        std.debug.print("Created: {s}\n", .{file.path});
-        var file_writer = f.writer(io, &.{});
-        file_writer.interface.writeAll(file.src) catch |err| fatal.file(file.path, err);
+        if (cmd.multilingual and std.mem.startsWith(u8, file.path, "content/")) {
+            const rest = file.path["content/".len..];
+            var zh_buf: [std.fs.max_path_bytes]u8 = undefined;
+            var en_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const zh = std.fmt.bufPrint(&zh_buf, "content/zh-CN/{s}", .{rest}) catch fatal.oom();
+            const en = std.fmt.bufPrint(&en_buf, "content/en/{s}", .{rest}) catch fatal.oom();
+            writeProjectFile(io, zh, file.src);
+            writeProjectFile(io, en, file.src);
+            continue;
+        }
+        writeProjectFile(io, file.path, file.src);
     }
 
-    std.debug.print(
+    if (cmd.multilingual) {
+        writeProjectFile(io, "i18n/zh-CN.ziggy", "{}\n");
+        writeProjectFile(io, "i18n/en.ziggy", "{}\n");
+    }
+
+    if (cmd.multilingual) {
+        std.debug.print(
+            \\
+            \\Multilingual site is ready. zh-CN is the default locale at /,
+            \\and English is at /en/. Translate content/en/ and the strings
+            \\in i18n/.
+            \\
+            \\  zdoc                 preview
+            \\  zdoc site            build into public/
+            \\
+        , .{});
+    } else std.debug.print(
         \\
         \\Official site is ready. The landing, product page and blog
         \\build together. Docs and the paper are Markdown trees beside them.
@@ -157,6 +164,32 @@ pub fn init(io: Io, gpa: Allocator, args: []const []const u8) bool {
     , .{});
 
     return false;
+}
+
+fn writeProjectFile(io: Io, path: []const u8, src: []const u8) void {
+    const dirname = std.fs.path.dirnamePosix(path);
+    const basename = std.fs.path.basenamePosix(path);
+
+    const base_dir = if (dirname) |dn|
+        Io.Dir.cwd().createDirPathOpen(io, dn, .{}) catch |err| fatal.dir(dn, err)
+    else
+        Io.Dir.cwd();
+
+    const f = base_dir.createFile(io, basename, .{
+        .exclusive = true,
+    }) catch |err| switch (err) {
+        else => fatal.file(basename, err),
+        error.PathAlreadyExists => {
+            std.debug.print(
+                "WARNING: '{s}' already exists, skipping.\n",
+                .{path},
+            );
+            return;
+        },
+    };
+    std.debug.print("Created: {s}\n", .{path});
+    var file_writer = f.writer(io, &.{});
+    file_writer.interface.writeAll(src) catch |err| fatal.file(path, err);
 }
 
 fn enterDir(io: Io, explicit: ?[]const u8) void {

@@ -14,19 +14,30 @@
     var norm = href.replace(/\/index\.html$/, "/").replace(/\/+$/, "") || "/";
     if (norm === here) {
       links[i].classList.add("is-active");
+      // A long sidebar starts at the top. The current page should already
+      // be in view when the document opens.
+      if (links[i].scrollIntoView) {
+        links[i].scrollIntoView({ block: "nearest" });
+      }
       break;
     }
   }
 
   // Scroll-spy for the table of contents. Uses the heading anchors the docs
   // theme generates, so it only wires up when they are present.
-  var headings = document.querySelectorAll(".doc h1[id], .doc h2[id], .doc h3[id]");
+  var headings = document.querySelectorAll(
+    ".doc h1[id], .doc h2[id], .doc h3[id], .doc h4[id], .doc h5[id], .doc h6[id]"
+  );
   if (headings.length === 0) return;
 
   var tocLinks = {};
   var tocAnchors = document.querySelectorAll(".toc a[href^='#']");
   for (var j = 0; j < tocAnchors.length; j++) {
-    tocLinks[tocAnchors[j].getAttribute("href").slice(1)] = tocAnchors[j];
+    var raw = tocAnchors[j].getAttribute("href").slice(1);
+    try {
+      raw = decodeURIComponent(raw);
+    } catch (err) {}
+    tocLinks[raw] = tocAnchors[j];
   }
 
   var active = null;
@@ -35,7 +46,23 @@
     if (id === active) return;
     if (active && tocLinks[active]) tocLinks[active].classList.remove("is-active");
     active = id;
-    if (tocLinks[id]) tocLinks[id].classList.add("is-active");
+    if (tocLinks[id]) {
+      tocLinks[id].classList.add("is-active");
+      revealOutline(tocLinks[id]);
+    }
+  }
+
+  // Move the current outline entry into the sticky column. Adjusting
+  // scrollTop on that column leaves the article where the reader put it.
+  function revealOutline(link) {
+    var box = link.closest(".toc");
+    if (!box || box.scrollHeight <= box.clientHeight) return;
+    var linkRect = link.getBoundingClientRect();
+    var boxRect = box.getBoundingClientRect();
+    if (linkRect.top < boxRect.top) box.scrollTop -= boxRect.top - linkRect.top;
+    else if (linkRect.bottom > boxRect.bottom) {
+      box.scrollTop += linkRect.bottom - boxRect.bottom;
+    }
   }
 
   function onScroll() {
@@ -396,4 +423,245 @@
   document.addEventListener("click", function (ev) {
     if (!box.contains(ev.target)) close();
   });
+})();
+
+// ----------------------------------------------------------------- code copy
+//
+// A button on each fenced block. The host is the figure when the highlighter
+// wrapped the pre, and the pre itself otherwise. Position comes from
+// `.code-copy-host` in the stylesheet.
+(function codeCopy() {
+  "use strict";
+
+  function codeText(pre) {
+    var lines = pre.querySelectorAll(".code-line");
+    if (lines.length) {
+      var parts = [];
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i].cloneNode(true);
+        var nums = line.querySelectorAll(".code-line-no");
+        for (var n = 0; n < nums.length; n++) {
+          nums[n].parentNode.removeChild(nums[n]);
+        }
+        parts.push(line.textContent || "");
+      }
+      return parts.join("\n");
+    }
+    var clone = pre.cloneNode(true);
+    var buttons = clone.querySelectorAll(".code-copy");
+    for (var b = 0; b < buttons.length; b++) {
+      buttons[b].parentNode.removeChild(buttons[b]);
+    }
+    return clone.textContent || "";
+  }
+
+  function copyWithTextarea(text) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (err) {
+      ok = false;
+    }
+    document.body.removeChild(area);
+    return ok;
+  }
+
+  function writeClipboard(text, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {});
+      return;
+    }
+    if (copyWithTextarea(text)) done();
+  }
+
+  function attach(pre) {
+    var parent = pre.parentElement;
+    var host = pre;
+    if (
+      parent &&
+      parent.tagName === "FIGURE" &&
+      parent.classList.contains("code-block")
+    ) {
+      host = parent;
+    }
+    host.classList.add("code-copy-host");
+
+    var code = pre.querySelector("code");
+    var lang = "";
+    if (code && code.className) lang = code.className.trim().split(/\s+/)[0];
+    if (lang && lang !== "mermaid") {
+      var label = document.createElement("span");
+      label.className = "code-lang";
+      label.textContent = lang;
+      if (host.tagName === "FIGURE") {
+        var caption = host.querySelector("figcaption");
+        if (caption) caption.appendChild(label);
+        else host.insertBefore(label, host.firstChild);
+      } else {
+        host.insertBefore(label, host.firstChild);
+      }
+    }
+
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-copy";
+    button.textContent = "Copy";
+    button.setAttribute("aria-label", "Copy code");
+    host.appendChild(button);
+
+    var resetTimer = null;
+    button.addEventListener("click", function () {
+      writeClipboard(codeText(pre), function () {
+        button.textContent = "Copied";
+        clearTimeout(resetTimer);
+        resetTimer = setTimeout(function () {
+          button.textContent = "Copy";
+        }, 1500);
+      });
+    });
+  }
+
+  var pres = document.querySelectorAll(".doc pre");
+  for (var i = 0; i < pres.length; i++) {
+    var pre = pres[i];
+    if (pre.classList.contains("mermaid")) continue;
+    if (pre.closest(".mermaid")) continue;
+    attach(pre);
+  }
+})();
+
+// --------------------------------------------------------- heading permalinks
+(function headingPermalinks() {
+  "use strict";
+
+  var headings = document.querySelectorAll(
+    ".doc h1[id], .doc h2[id], .doc h3[id], .doc h4[id], .doc h5[id], .doc h6[id]"
+  );
+  for (var i = 0; i < headings.length; i++) {
+    var heading = headings[i];
+    if (heading.closest("summary")) continue;
+    if (heading.querySelector(".heading-anchor")) continue;
+    var id = heading.getAttribute("id");
+    if (!id) continue;
+    var link = document.createElement("a");
+    link.className = "heading-anchor";
+    link.href = "#" + encodeURIComponent(id);
+    link.setAttribute("aria-label", "Permalink");
+    link.textContent = "#";
+    heading.appendChild(link);
+  }
+})();
+
+// ------------------------------------------------------------ manual theme
+//
+// An inline script in the head may already have set `data-theme` from
+// localStorage. This only mirrors that choice onto the toggle, and writes
+// the attribute when the reader picks the other mode.
+(function themeToggle() {
+  "use strict";
+
+  var button = document.getElementById("theme-toggle");
+  if (!button) return;
+
+  function effectiveTheme() {
+    var theme = document.documentElement.getAttribute("data-theme");
+    if (theme === "dark" || theme === "light") return theme;
+    if (
+      window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches
+    ) {
+      return "dark";
+    }
+    return "light";
+  }
+
+  function sync() {
+    var dark = effectiveTheme() === "dark";
+    button.setAttribute("aria-pressed", dark ? "true" : "false");
+    button.textContent = dark ? "Light" : "Dark";
+    button.setAttribute(
+      "aria-label",
+      dark ? "Use light theme" : "Use dark theme"
+    );
+  }
+
+  sync();
+
+  button.addEventListener("click", function () {
+    var next = effectiveTheme() === "dark" ? "light" : "dark";
+    try {
+      localStorage.setItem("zdoc-theme", next);
+    } catch (err) {}
+    document.documentElement.setAttribute("data-theme", next);
+    sync();
+  });
+})();
+
+// ---------------------------------------------------- outline on a narrow page
+//
+// The right-hand column is a sticky list on a wide window. Below 1100px the
+// stylesheet moves that list above the article, and this folds it so a long
+// outline does not push the page down. Without JavaScript the list stays
+// expanded.
+(function narrowOutline() {
+  "use strict";
+
+  var toc = document.getElementById("toc");
+  if (!toc || toc.querySelector("details")) return;
+  if (!window.matchMedia || !window.matchMedia("(max-width: 1100px)").matches) return;
+
+  var title = toc.querySelector(".toc__title");
+  var details = document.createElement("details");
+  details.className = "toc__panel";
+  if (title) {
+    var summary = document.createElement("summary");
+    summary.className = title.className;
+    summary.textContent = title.textContent;
+    title.parentNode.removeChild(title);
+    details.appendChild(summary);
+  }
+  while (toc.firstChild) details.appendChild(toc.firstChild);
+  toc.appendChild(details);
+})();
+
+// ---------------------------------------------------------- version switch
+(function versionSwitch() {
+  "use strict";
+
+  var selects = document.querySelectorAll("select.version-switch__select");
+  for (var i = 0; i < selects.length; i++) {
+    selects[i].addEventListener("change", function () {
+      if (this.value) window.location.href = this.value;
+    });
+  }
+})();
+
+// ----------------------------------------------------------- external links
+//
+// A link that leaves this origin opens in a new tab. Same-site absolute
+// URLs stay in this tab. The class is what the stylesheet uses for the mark.
+(function externalLinks() {
+  "use strict";
+
+  var origin = window.location.origin;
+  var links = document.querySelectorAll("a[href]");
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].getAttribute("href") || "";
+    if (href.indexOf("http://") !== 0 && href.indexOf("https://") !== 0) continue;
+    var url;
+    try {
+      url = new URL(href);
+    } catch (err) {
+      continue;
+    }
+    if (url.origin === origin) continue;
+    links[i].target = "_blank";
+    links[i].rel = "noopener noreferrer";
+    links[i].classList.add("external");
+  }
 })();

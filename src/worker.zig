@@ -321,6 +321,327 @@ fn analyzeFrontmatter(page_arena: Allocator, p: *Page) error{OutOfMemory}!void {
     }
 }
 
+/// Windows-style separators are ordinary in imported documentation. Treat
+/// them as `/` instead of asserting: a backslash is not a path component the
+/// site generator can resolve.
+fn normalizeAssetRef(arena: std.mem.Allocator, ref: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, ref, '\\') == null) return ref;
+    return try std.mem.replaceOwned(u8, arena, ref, "\\", "/");
+}
+
+/// The fragment part of a link suffix. `?query#fragment` and `?query` are
+/// valid suffix encodings now, so the id check must look past the query.
+fn linkFragment(ref: []const u8) []const u8 {
+    if (std.mem.indexOfScalar(u8, ref, '#')) |i| return ref[i + 1 ..];
+    if (ref.len > 0 and ref[0] == '?') return "";
+    return ref;
+}
+
+fn hasUrlScheme(s: []const u8) bool {
+    const colon = std.mem.indexOfScalar(u8, s, ':') orelse return false;
+    const boundary = std.mem.indexOfAny(u8, s, "/?#") orelse s.len;
+    if (colon >= boundary or colon == 0) return false;
+    for (s[0..colon]) |byte| {
+        if (!std.ascii.isAlphanumeric(byte) and byte != '+' and byte != '-' and byte != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn isHtmlTagNameByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or
+        byte == '-' or byte == ':' or byte == '_' or byte == '.';
+}
+
+fn isHtmlAttrNameTerminator(byte: u8) bool {
+    return std.ascii.isWhitespace(byte) or
+        byte == '=' or byte == '/' or byte == '>' or byte == '<';
+}
+
+/// Finds the `</tag ...>` that ends a raw-text element, returning the index
+/// just past its `>`. Returns null when the closing tag is not in this
+/// literal; the caller then keeps the raw-text state for following nodes.
+fn findRawTextClose(html: []const u8, from: usize, tag_name: []const u8) ?usize {
+    var pos = from;
+    while (std.mem.indexOfScalarPos(u8, html, pos, '<')) |lt| {
+        const rest = html[lt..];
+        if (rest.len > 2 + tag_name.len and rest[1] == '/' and
+            std.ascii.eqlIgnoreCase(rest[2..][0..tag_name.len], tag_name))
+        {
+            const boundary = rest[2 + tag_name.len];
+            if (std.ascii.isWhitespace(boundary) or boundary == '>' or boundary == '/') {
+                const gt = std.mem.indexOfScalarPos(u8, html, lt, '>') orelse
+                    return html.len;
+                return gt + 1;
+            }
+        }
+        pos = lt + 1;
+    }
+    return null;
+}
+
+/// Marks the asset a single URL refers to for installation. Raw HTML is
+/// deliberately not rewritten, and a URL that resolves to nothing is not an
+/// error: much of the HTML in imported documentation points at runtime URLs
+/// or at files outside the content tree.
+fn markAssetRef(
+    scratch: Allocator,
+    b: *const Build,
+    variant: *const Variant,
+    page: *const Page,
+    raw_ref: []const u8,
+) error{OutOfMemory}!void {
+    var ref = std.mem.trim(u8, raw_ref, " \t\r\n\x0b\x0c");
+    if (std.mem.indexOfAny(u8, ref, "?#")) |cut| ref = ref[0..cut];
+
+    if (ref.len == 0) return;
+    if (std.mem.startsWith(u8, ref, "//")) return;
+    if (hasUrlScheme(ref)) return;
+
+    if (ref[0] == '/') {
+        // Site-root relative: content-root page assets and `static/` files
+        // both live at the same output URL.
+        const rel = ref[1..];
+        if (rel.len == 0 or rel[rel.len - 1] == '/' or
+            rel[rel.len - 1] == '\\') return;
+
+        if (PathName.get(&variant.string_table, &variant.path_table, rel)) |pn| {
+            if (variant.urls.getPtr(pn)) |hint| switch (hint.kind) {
+                .page_asset => |*rc| _ = rc.fetchAdd(1, .acq_rel),
+                else => {},
+            };
+        }
+
+        if (PathName.get(&b.st, &b.pt, rel)) |pn| {
+            if (b.site_assets.getPtr(pn)) |rc| _ = rc.fetchAdd(1, .acq_rel);
+        }
+        return;
+    }
+
+    // Relative to the Markdown file's directory, the same way Markdown asset
+    // directives resolve in docs mode.
+    if (ref[ref.len - 1] == '/') return;
+
+    var buf: std.ArrayList(String) = .empty;
+    try buf.appendSlice(scratch, page._scan.file.path.slice(&variant.path_table));
+
+    var it = std.mem.tokenizeScalar(u8, ref, '/');
+    while (it.next()) |component_bytes| {
+        if (std.mem.eql(u8, component_bytes, ".")) continue;
+        if (std.mem.eql(u8, component_bytes, "..")) {
+            if (buf.items.len == 0) return;
+            _ = buf.pop();
+            continue;
+        }
+
+        const component = variant.string_table.get(component_bytes) orelse return;
+        try buf.append(scratch, component);
+    }
+
+    if (buf.items.len == 0) return;
+    const path_strings = buf.items[0 .. buf.items.len - 1];
+    const name = buf.items[buf.items.len - 1];
+    const path = variant.path_table.get(path_strings) orelse return;
+
+    const pn: PathName = .{ .path = path, .name = name };
+    if (variant.urls.getPtr(pn)) |hint| switch (hint.kind) {
+        .page_asset => |*rc| _ = rc.fetchAdd(1, .acq_rel),
+        else => {},
+    };
+}
+
+/// Scans raw HTML for `href`, `src`, `poster` and `srcset` attributes.
+///
+/// `raw_text` carries `<script>`/`<style>` state across inline HTML nodes.
+/// CommonMark splits inline raw HTML at tag boundaries, so the body of a
+/// script can span several nodes; block HTML arrives as one literal and is
+/// handled entirely within this call.
+fn scanHtmlAssets(
+    scratch: Allocator,
+    b: *const Build,
+    variant: *const Variant,
+    page: *const Page,
+    html: []const u8,
+    raw_text: *?[]const u8,
+) error{OutOfMemory}!void {
+    var i: usize = 0;
+
+    if (raw_text.*) |tag_name| {
+        const next = findRawTextClose(html, 0, tag_name) orelse return;
+        raw_text.* = null;
+        i = next;
+    }
+
+    while (std.mem.indexOfScalarPos(u8, html, i, '<')) |lt| {
+        i = lt;
+
+        if (std.mem.startsWith(u8, html[i..], "<!--")) {
+            const end = std.mem.indexOfPos(u8, html, i + 4, "-->") orelse return;
+            i = end + 3;
+            continue;
+        }
+
+        var j = i + 1;
+        if (j >= html.len) return;
+        if (html[j] == '/' or html[j] == '!' or html[j] == '?') {
+            // Closing tags and declarations carry no asset attributes.
+            const gt = std.mem.indexOfScalarPos(u8, html, j, '>') orelse return;
+            i = gt + 1;
+            continue;
+        }
+
+        const name_start = j;
+        while (j < html.len and isHtmlTagNameByte(html[j])) j += 1;
+        const tag_name = html[name_start..j];
+        if (tag_name.len == 0) {
+            i += 1;
+            continue;
+        }
+
+        var self_closing = false;
+        while (j < html.len) {
+            while (j < html.len and std.ascii.isWhitespace(html[j])) j += 1;
+            if (j >= html.len) break;
+            if (html[j] == '>') {
+                j += 1;
+                break;
+            }
+            if (html[j] == '/') {
+                j += 1;
+                if (j < html.len and html[j] == '>') {
+                    self_closing = true;
+                    j += 1;
+                    break;
+                }
+                continue;
+            }
+
+            const attr_start = j;
+            while (j < html.len and !isHtmlAttrNameTerminator(html[j])) j += 1;
+            const attr_name = html[attr_start..j];
+            if (attr_name.len == 0) {
+                j += 1;
+                continue;
+            }
+
+            while (j < html.len and std.ascii.isWhitespace(html[j])) j += 1;
+            if (j >= html.len or html[j] != '=') continue;
+            j += 1;
+            while (j < html.len and std.ascii.isWhitespace(html[j])) j += 1;
+            if (j >= html.len) break;
+
+            var value: []const u8 = "";
+            if (html[j] == '"' or html[j] == '\'') {
+                const quote = html[j];
+                j += 1;
+                const value_start = j;
+                while (j < html.len and html[j] != quote) j += 1;
+                value = html[value_start..j];
+                if (j < html.len) j += 1;
+            } else {
+                const value_start = j;
+                while (j < html.len and !std.ascii.isWhitespace(html[j]) and
+                    html[j] != '>') j += 1;
+                value = html[value_start..j];
+                // In `<img src=foo.png/>` the slash belongs to the tag.
+                if (j < html.len and html[j] == '>' and
+                    value.len > 0 and value[value.len - 1] == '/')
+                {
+                    value = value[0 .. value.len - 1];
+                }
+            }
+
+            if (value.len == 0) continue;
+            if (std.ascii.eqlIgnoreCase(attr_name, "srcset")) {
+                var candidates = std.mem.splitScalar(u8, value, ',');
+                while (candidates.next()) |candidate| {
+                    const desc = std.mem.trim(u8, candidate, " \t\r\n\x0b\x0c");
+                    if (desc.len == 0) continue;
+                    const url_end = std.mem.indexOfAny(
+                        u8,
+                        desc,
+                        " \t\r\n\x0b\x0c",
+                    ) orelse desc.len;
+                    try markAssetRef(scratch, b, variant, page, desc[0..url_end]);
+                }
+            } else if (std.ascii.eqlIgnoreCase(attr_name, "href") or
+                std.ascii.eqlIgnoreCase(attr_name, "src") or
+                std.ascii.eqlIgnoreCase(attr_name, "poster"))
+            {
+                try markAssetRef(scratch, b, variant, page, value);
+            }
+        }
+
+        i = j;
+        if (!self_closing and
+            (std.ascii.eqlIgnoreCase(tag_name, "script") or
+                std.ascii.eqlIgnoreCase(tag_name, "style")))
+        {
+            if (findRawTextClose(html, i, tag_name)) |next| {
+                i = next;
+            } else {
+                raw_text.* = tag_name;
+                return;
+            }
+        }
+    }
+}
+
+const LocalePage = struct {
+    page: Page,
+    path: Path,
+    id: u32,
+};
+
+/// Resolves a page link that names another locale. A translation key wins
+/// over the path, because localized pages often do not share a filename.
+fn locateLocalePage(
+    b: *const Build,
+    linked: Page,
+    ref: []const u8,
+    locale: []const u8,
+) ?LocalePage {
+    const locales = switch (b.cfg.site) {
+        .multilingual => |ml| ml.locales,
+        .simple => return null,
+    };
+    const vidx: u32 = for (locales, 0..) |l, i| {
+        if (std.mem.eql(u8, l.code, locale)) break @intCast(i);
+    } else return null;
+
+    const tv = &b.variants[vidx];
+    if (linked.translation_key) |tk| {
+        for (tv.pages.items) |candidate| {
+            const other = candidate.translation_key orelse continue;
+            if (!candidate._parse.active) continue;
+            if (!std.mem.eql(u8, tk, other)) continue;
+            return .{
+                .page = candidate,
+                .path = candidate._scan.url,
+                .id = candidate._scan.page_id,
+            };
+        }
+        return null;
+    }
+
+    const tpath = tv.path_table.getPathNoName(
+        &tv.string_table,
+        &.{},
+        ref,
+    ) orelse return null;
+    const index_html = tv.string_table.get("index.html") orelse return null;
+    const hint = tv.urls.get(.{ .path = tpath, .name = index_html }) orelse return null;
+    if (hint.kind != .page_main) return null;
+    const candidate = tv.pages.items[hint.id];
+    if (!candidate._parse.active) return null;
+    return .{
+        .page = candidate,
+        .path = tpath,
+        .id = hint.id,
+    };
+}
+
 fn analyzeContent(
     io: Io,
     page_arena: Allocator,
@@ -335,13 +656,27 @@ fn analyzeContent(
     const variant = &b.variants[variant_id];
     const autosize = b.cfg.getImageAutosize();
     const docs_mode = b.cfg.isDocs();
-    const index_smd: String = @enumFromInt(1);
+    const index_smd: String = @fromBackingInt(@intCast(1));
     assert(variant.string_table.get("index.smd") == index_smd);
-    const index_html: String = @enumFromInt(11);
+    const index_html: String = @fromBackingInt(@intCast(11));
     assert(variant.string_table.get("index.html") == index_html);
+
+    // Tracks `<script>`/`<style>` bodies while traversing inline HTML nodes.
+    var raw_text: ?[]const u8 = null;
 
     var current: ?supermd.Node = ast.md.root.firstChild();
     outer: while (current) |n| : (current = n.next(ast.md.root)) {
+        if (docs_mode) {
+            switch (n.nodeType()) {
+                .HTML_BLOCK, .HTML_INLINE => {
+                    if (n.literal()) |html| {
+                        try scanHtmlAssets(scratch, b, variant, page, html, &raw_text);
+                    }
+                },
+                else => {},
+            }
+        }
+
         if (n.nodeType() == .CODE_BLOCK) blk: {
             const fence_info = n.fenceInfo() orelse break :blk;
             var fence_it = std.mem.tokenizeScalar(u8, fence_info, ' ');
@@ -369,15 +704,36 @@ fn analyzeContent(
                 const path, const base_dir = switch (code.src.?) {
                     else => unreachable,
                     .page_asset => |pa| blk: {
-                        assert(std.mem.indexOfScalar(u8, pa.ref, '\\') == null);
+                        const ref = try normalizeAssetRef(page_arena, pa.ref);
                         var buf: std.ArrayList(String) = .empty;
 
-                        try buf.appendSlice(scratch, page._scan.url.slice(
-                            &variant.path_table,
-                        ));
+                        // Docs mode resolves assets against the source file's
+                        // directory. `guide/foo.md` writes `img.png` next to
+                        // itself, not inside an imaginary `guide/foo/`.
+                        const base = if (docs_mode)
+                            page._scan.file.path.slice(&variant.path_table)
+                        else
+                            page._scan.url.slice(&variant.path_table);
+                        try buf.appendSlice(scratch, base);
 
-                        var it = std.mem.tokenizeScalar(u8, pa.ref, '/');
+                        var it = std.mem.tokenizeScalar(u8, ref, '/');
                         while (it.next()) |component_bytes| {
+                            if (std.mem.eql(u8, component_bytes, ".")) continue;
+                            if (std.mem.eql(u8, component_bytes, "..")) {
+                                if (buf.items.len == 0) {
+                                    try errors.append(page_arena, .{
+                                        .node = n,
+                                        .kind = .{ .missing_asset = .{
+                                            .ref = ref,
+                                            .kind = .page,
+                                        } },
+                                    });
+                                    continue :outer;
+                                }
+                                _ = buf.pop();
+                                continue;
+                            }
+
                             const component = variant.string_table.get(
                                 component_bytes,
                             ) orelse {
@@ -385,7 +741,7 @@ fn analyzeContent(
                                     .node = n,
                                     .kind = .{
                                         .missing_asset = .{
-                                            .ref = pa.ref,
+                                            .ref = ref,
                                             .kind = .page,
                                         },
                                     },
@@ -446,10 +802,11 @@ fn analyzeContent(
                         break :blk .{ asset.input_path, Io.Dir.cwd() };
                     },
                     .site_asset => |*sa| blk: {
-                        if (PathName.get(&b.st, &b.pt, sa.ref)) |pn| {
+                        const ref = try normalizeAssetRef(page_arena, sa.ref);
+                        if (PathName.get(&b.st, &b.pt, ref)) |pn| {
                             if (b.site_assets.contains(pn)) {
                                 break :blk .{
-                                    sa.ref,
+                                    ref,
                                     // dir is not relevant because the path is
                                     // absolute
                                     b.site_assets_dir,
@@ -461,7 +818,7 @@ fn analyzeContent(
                             .node = n,
                             .kind = .{
                                 .missing_asset = .{
-                                    .ref = sa.ref,
+                                    .ref = ref,
                                     .kind = .site,
                                 },
                             },
@@ -536,12 +893,13 @@ fn analyzeContent(
                         }
 
                         if (val.ref) |ref| {
-                            if (!val.ref_unsafe and !ast.ids.contains(ref) and ref.len > 0) {
+                            const frag = linkFragment(ref);
+                            if (!val.ref_unsafe and frag.len > 0 and !ast.ids.contains(frag)) {
                                 try errors.append(page_arena, .{
                                     .node = n,
                                     .kind = .{
                                         .unknown_ref = .{
-                                            .ref = ref,
+                                            .ref = frag,
                                         },
                                     },
                                 });
@@ -554,14 +912,87 @@ fn analyzeContent(
                         // This value is only expected for Link directives.
                         if (@TypeOf(val.*) != supermd.context.Link) continue :outer;
 
+                        // `//host/path` is a protocol-relative URL. SuperMD
+                        // classifies it as an absolute page link because it
+                        // starts with `/`; leave it as a URL.
+                        const raw_link = n.link() orelse "";
+                        if (p.kind == .absolute and std.mem.startsWith(u8, raw_link, "//")) {
+                            val.src = .{ .url = raw_link };
+                            continue :outer;
+                        }
+                        // SuperMD only recognizes `mailto:` and `scheme://`
+                        // as URLs. `tel:`, `data:`, and `javascript:` fall
+                        // into the page branch and produce a spurious
+                        // "unknown page" warning. Treat any RFC-3986 scheme
+                        // as a URL; the renderer separately rejects schemes
+                        // that execute code.
+                        if (hasUrlScheme(raw_link)) {
+                            val.src = .{ .url = raw_link };
+                            continue :outer;
+                        }
+
                         // Markdown almost always links with the file
                         // extension (`[x](OTHER.md)`), but Zine interns page
                         // URLs without it. Try the ref as written first, then
                         // again with a trailing `.md` removed.
                         var link_ref = p.ref;
+
+                        // Sibling links keep `#fragment` and `?query` inside
+                        // the ref. Resolve the path without them and give the
+                        // suffix back to the directive so the renderer can
+                        // append it after the resolved path. Absolute and `.`
+                        // links already have their fragment in `lnk.ref`, so
+                        // preserve that and merge any query into it.
+                        var query: ?[]const u8 = null;
+                        var fragment: ?[]const u8 = null;
+                        if (@TypeOf(val.*) == supermd.context.Link) fragment = val.ref;
+
+                        const q = std.mem.indexOfScalar(u8, link_ref, '?');
+                        const h = std.mem.indexOfScalar(u8, link_ref, '#');
+                        const cut = @min(
+                            q orelse link_ref.len,
+                            h orelse link_ref.len,
+                        );
+                        // Query strings come before fragments in a URL. A
+                        // `?` after a `#` is part of the fragment text, not a
+                        // query.
+                        if (q) |qi| {
+                            if (h == null or qi < h.?) {
+                                query = link_ref[qi + 1 .. if (h) |hi| hi else link_ref.len];
+                            }
+                        }
+                        if (h) |hi| {
+                            fragment = link_ref[hi + 1 ..];
+                        }
+                        link_ref = link_ref[0..cut];
+
+                        if (@TypeOf(val.*) == supermd.context.Link) {
+                            val.ref = if (query) |qs| blk: {
+                                if (fragment) |frag| {
+                                    break :blk try std.fmt.allocPrint(
+                                        page_arena,
+                                        "?{s}#{s}",
+                                        .{ qs, frag },
+                                    );
+                                }
+                                break :blk try std.fmt.allocPrint(
+                                    page_arena,
+                                    "?{s}",
+                                    .{qs},
+                                );
+                            } else fragment;
+                        }
+
                         const path: Path = switch (p.kind) {
                             .absolute => blk: {
                                 log.debug("absolute page link '{s}'", .{p.ref});
+                                if (docs_mode) {
+                                    if (docs.scan.resolvePageRef(
+                                        variant,
+                                        &.{},
+                                        link_ref,
+                                    )) |path| break :blk path;
+                                }
                                 if (variant.path_table.getPathNoName(
                                     &variant.string_table,
                                     &.{},
@@ -639,7 +1070,7 @@ fn analyzeContent(
                                         .content_sub_path
                                         .slice(&variant.path_table);
 
-if (docs_mode) {
+                                if (docs_mode) {
                                     // Docs mode goes through the shared
                                     // resolver so that a sibling link written
                                     // with `../` climbs the same way a `.`
@@ -742,7 +1173,22 @@ if (docs_mode) {
 
                         log.debug("absolute page link '{s}' hint: {any}", .{ p.ref, hint });
                         switch (hint.kind) {
-                            .page_main => {},
+                            .page_main => {
+                                // A link to a draft or excluded page resolves
+                                // to a URL that is never written. Treat it as
+                                // unresolved rather than emitting a 404.
+                                if (!variant.pages.items[hint.id]._parse.active) {
+                                    try errors.append(page_arena, .{
+                                        .node = n,
+                                        .kind = .{
+                                            .unknown_page = .{
+                                                .ref = p.ref,
+                                            },
+                                        },
+                                    });
+                                    continue :outer;
+                                }
+                            },
                             else => {
                                 log.debug("absolute page link '{s}' wrong kint kind: {any}", .{ p.ref, hint.kind });
                                 try errors.append(page_arena, .{
@@ -758,15 +1204,29 @@ if (docs_mode) {
                             },
                         }
 
-                        const other_page = if (p.locale) |loc| {
-                            _ = loc;
-                            @panic("TODO");
-                        } else variant.pages.items[hint.id];
+                        const other_page, const resolved_path, const resolved_id = if (p.locale) |loc| blk: {
+                            const located = locateLocalePage(b, variant.pages.items[hint.id], link_ref, loc) orelse {
+                                try errors.append(page_arena, .{
+                                    .node = n,
+                                    .kind = .{
+                                        .unknown_page = .{
+                                            .ref = p.ref,
+                                        },
+                                    },
+                                });
+                                continue :outer;
+                            };
+                            break :blk .{ located.page, located.path, located.id };
+                        } else .{
+                            variant.pages.items[hint.id],
+                            path,
+                            hint.id,
+                        };
 
                         p.resolved = .{
-                            .page_id = hint.id,
+                            .page_id = resolved_id,
                             .variant_id = other_page._scan.variant_id,
-                            .path = @intFromEnum(path),
+                            .path = @backingInt(resolved_path),
                         };
 
                         if (val.alternative) |alt_name| {
@@ -793,12 +1253,15 @@ if (docs_mode) {
                         }
 
                         if (val.ref) |ref| {
-                            if (!val.ref_unsafe and !other_page._parse.ast.ids.contains(ref)) {
+                            const frag = linkFragment(ref);
+                            if (!val.ref_unsafe and frag.len > 0 and
+                                !other_page._parse.ast.ids.contains(frag))
+                            {
                                 try errors.append(page_arena, .{
                                     .node = n,
                                     .kind = .{
                                         .unknown_ref = .{
-                                            .ref = ref,
+                                            .ref = frag,
                                         },
                                     },
                                 });
@@ -808,16 +1271,36 @@ if (docs_mode) {
                     },
 
                     .page_asset => |*pa| {
-                        assert(std.mem.indexOfScalar(u8, pa.ref, '\\') == null);
+                        const ref = try normalizeAssetRef(page_arena, pa.ref);
                         var buf: std.ArrayList(String) = .empty;
 
-                        try buf.appendSlice(
-                            scratch,
-                            page._scan.url.slice(&variant.path_table),
-                        );
+                        // See the matching code-directive branch: docs assets
+                        // live next to the Markdown file, not under the
+                        // page's generated URL.
+                        const base = if (docs_mode)
+                            page._scan.file.path.slice(&variant.path_table)
+                        else
+                            page._scan.url.slice(&variant.path_table);
+                        try buf.appendSlice(scratch, base);
 
-                        var it = std.mem.tokenizeScalar(u8, pa.ref, '/');
+                        var it = std.mem.tokenizeScalar(u8, ref, '/');
                         while (it.next()) |component_bytes| {
+                            if (std.mem.eql(u8, component_bytes, ".")) continue;
+                            if (std.mem.eql(u8, component_bytes, "..")) {
+                                if (buf.items.len == 0) {
+                                    try errors.append(page_arena, .{
+                                        .node = n,
+                                        .kind = .{ .missing_asset = .{
+                                            .ref = ref,
+                                            .kind = .page,
+                                        } },
+                                    });
+                                    continue :outer;
+                                }
+                                _ = buf.pop();
+                                continue;
+                            }
+
                             const component = variant.string_table.get(
                                 component_bytes,
                             ) orelse {
@@ -825,8 +1308,8 @@ if (docs_mode) {
                                     .node = n,
                                     .kind = .{
                                         .missing_asset = .{
-                                            .ref = pa.ref,
-                                            .kind = .site,
+                                            .ref = ref,
+                                            .kind = .page,
                                         },
                                     },
                                 });
@@ -846,8 +1329,8 @@ if (docs_mode) {
                                         //       grab image size info if needed
                                         _ = rc.fetchAdd(1, .acq_rel);
                                         pa.resolved = .{
-                                            .path = @intFromEnum(path),
-                                            .name = @intFromEnum(name),
+                                            .path = @backingInt(path),
+                                            .name = @backingInt(name),
                                         };
 
                                         const bytes = try std.fmt.allocPrint(scratch, "{f}", .{
@@ -887,11 +1370,11 @@ if (docs_mode) {
                         continue :outer;
                     },
                     .site_asset => |*sa| { //ref
-                        assert(std.mem.indexOfScalar(u8, sa.ref, '\\') == null);
+                        const ref = try normalizeAssetRef(page_arena, sa.ref);
 
-                        const dirname = std.fs.path.dirnamePosix(sa.ref) orelse "";
+                        const dirname = std.fs.path.dirnamePosix(ref) orelse "";
                         if (b.pt.getPathNoName(&b.st, &.{}, dirname)) |path| {
-                            const basename = std.fs.path.basenamePosix(sa.ref);
+                            const basename = std.fs.path.basenamePosix(ref);
                             if (b.st.get(basename)) |name| {
                                 const pn: PathName = .{
                                     .path = path,
@@ -901,8 +1384,8 @@ if (docs_mode) {
                                 if (b.site_assets.getPtr(pn)) |rc| {
                                     _ = rc.fetchAdd(1, .acq_rel);
                                     sa.resolved = .{
-                                        .path = @intFromEnum(path),
-                                        .name = @intFromEnum(name),
+                                        .path = @backingInt(path),
+                                        .name = @backingInt(name),
                                     };
 
                                     if (autosize and directive.kind == .image and directive.kind.image.size == null) {
@@ -911,7 +1394,7 @@ if (docs_mode) {
                                             scratch,
                                             directive,
                                             b.site_assets_dir,
-                                            sa.ref,
+                                            ref,
                                         );
                                     }
                                     continue :outer;
@@ -923,7 +1406,7 @@ if (docs_mode) {
                             .node = n,
                             .kind = .{
                                 .missing_asset = .{
-                                    .ref = sa.ref,
+                                    .ref = ref,
                                     .kind = .site,
                                 },
                             },
@@ -1113,7 +1596,24 @@ fn renderPageInner(
         error.OutOfMemory => fatal.oom(),
         error.OutIO, error.ErrIO => fatal.msg("i/o error in superhtml", .{}),
         error.Quota => super_vm.setQuota(100),
-        error.WantSnippet => @panic("TODO: looad snippet"),
+        error.WantSnippet => {
+            const name = switch (super_vm.state) {
+                .want_snippet => |snippet| snippet,
+                else => "unknown",
+            };
+            std.debug.print(
+                "error: layout requested snippet '{s}', and zdoc has nowhere to load it from\n",
+                .{name},
+            );
+            build.any_rendering_error.store(true, .release);
+            if (build.mode == .memory) {
+                switch (kind) {
+                    .main => page._render.errors = err_aw.written(),
+                    .alternative => |aidx| page._render.alternatives[aidx].errors = err_aw.written(),
+                }
+            }
+            return;
+        },
         error.WantTemplate => {
             const template_subpath = super_vm.wantedTemplateName();
             const template_path = try root.join(

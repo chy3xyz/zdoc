@@ -1,0 +1,22 @@
+.zine_version = "{s}",
+.site = .multilingual(.{{
+    .host_url = "https://example.com",
+    .i18n_dir_path = "i18n",
+    .layouts_dir_path = "layouts",
+    .assets_dir_path = "assets",
+    .locales = [
+        .{{
+            .code = "zh-CN",
+            .name = "中文",
+            .site_title = "南窗",
+            .content_dir_path = "content/zh-CN",
+            .output_prefix_override = "",
+        }},
+        .{{
+            .code = "en",
+            .name = "English",
+            .site_title = "South Window",
+            .content_dir_path = "content/en",
+        }},
+    ],
+}}),

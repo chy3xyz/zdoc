@@ -366,16 +366,22 @@ fn scanContentDirInner(
         // The exact filename of the index page, which differs between
         // `index.smd` and `README.md` in docs mode. `undefined` until found.
         var index_name: ?String = null;
+        // When several candidates exist, the lowest rank wins. Without this
+        // the winner would depend on filesystem iteration order.
+        var index_rank: u8 = std.math.maxInt(u8);
         var it = dir.iterateAssumeFirstIteration();
         while (it.next(io) catch |err| fatal.dir(dir_entry.path, err)) |entry| {
             if (std.mem.startsWith(u8, entry.name, ".")) continue;
+            // `static/` at the content root is the passthrough directory. It
+            // is copied to the output root by the theme installer; scanning it
+            // as content would publish its Markdown as pages too.
+            if (docs_mode and dir_entry.path.len == 0 and
+                entry.kind == .directory and
+                std.mem.eql(u8, entry.name, "static")) continue;
             switch (entry.kind) {
                 else => continue,
                 .file, .sym_link => {
                     const str = try string_table.intern(gpa, entry.name);
-                    if (str == index_html) {
-                        @panic("TODO: error reporting for index.html in content section");
-                    }
                     const is_page = if (docs_mode)
                         docs.scan.isPage(entry.name)
                     else
@@ -386,8 +392,15 @@ fn scanContentDirInner(
                         else
                             str == index_smd;
                         if (is_index) {
-                            found_index_smd = true;
-                            index_name = str;
+                            const rank = if (docs_mode)
+                                docs.scan.indexRank(entry.name) orelse std.math.maxInt(u8)
+                            else
+                                0;
+                            if (!found_index_smd or rank < index_rank) {
+                                found_index_smd = true;
+                                index_name = str;
+                                index_rank = rank;
+                            }
                             continue;
                         }
                         try page_names.append(arena, str);
@@ -481,7 +494,9 @@ fn scanContentDirInner(
         const pages_old_len = pages.items.len;
         try pages.resize(gpa, pages_old_len + page_names.items.len);
 
-        if (builtin.mode == .debug) {
+        // Scan order feeds sitemap and search output. Filesystem iteration
+        // order is not stable across machines, so sort even in release builds.
+        {
             const Ctx = struct {
                 st: *StringTable,
                 pub fn lessThan(ctx: @This(), lhs: String, rhs: String) bool {

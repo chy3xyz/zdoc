@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const mime = @import("mime");
 const tracy = @import("tracy");
 const root = @import("../root.zig");
+const docs_cli = @import("docs.zig");
 const BuildAsset = root.BuildAsset;
 const worker = @import("../worker.zig");
 const fatal = @import("../fatal.zig");
@@ -68,7 +69,25 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
         "error: unable to start debouncer: {s}",
         .{@errorName(err)},
     );
-    var cfg, const base_dir_path = root.Config.load(io, gpa, .auto);
+
+    // A Zine project keeps the live server it has always had. Anything else
+    // is the tree `zdoc docs` builds when given no path: `docs/` if that
+    // directory exists, otherwise the current directory.
+    const docs_preview = !zineConfigExists(io, gpa);
+    var cfg: root.Config = undefined;
+    var base_dir_path: []const u8 = undefined;
+    var docs_theme_dir: ?[]const u8 = null;
+    if (docs_preview) {
+        const docs_cmd = docs_cli.DocsOptions.parse(io, gpa, &.{}, false) catch fatal.oom();
+        defer docs_cmd.deinit(gpa);
+        cfg = docs_cmd.config;
+        base_dir_path = docs_cmd.base_dir_path;
+        docs_theme_dir = docs_cmd.theme_dir;
+    } else {
+        const loaded_cfg, const loaded_base = root.Config.load(io, gpa, .auto);
+        cfg = loaded_cfg;
+        base_dir_path = loaded_base;
+    }
     switch (cfg.site) {
         .simple => |*s| {
             if (cmd.url_path_prefix) |url_path_prefix| {
@@ -97,19 +116,28 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
     var dirs_to_watch: std.ArrayListUnmanaged([:0]const u8) = .empty;
     defer if (builtin.mode == .debug) dirs_to_watch.deinit(gpa);
 
-    try dirs_to_watch.appendSlice(
-        gpa,
-        &.{
-            try std.fs.path.joinZ(gpa, &.{
-                base_dir_path,
-                cfg.getAssetsDirPath(),
-            }),
-            try std.fs.path.joinZ(gpa, &.{
-                base_dir_path,
-                cfg.getLayoutsDirPath(),
-            }),
-        },
-    );
+    // Watching `.` already covers the installed theme. Adding those
+    // directories again makes the Linux watcher register the same inode twice.
+    const content_covers_theme = docs_preview and switch (cfg.site) {
+        .simple => |s| dirCovers(s.content_dir_path, cfg.getLayoutsDirPath()) and
+            dirCovers(s.content_dir_path, cfg.getAssetsDirPath()),
+        .multilingual => false,
+    };
+    if (!content_covers_theme) {
+        try dirs_to_watch.appendSlice(
+            gpa,
+            &.{
+                try std.fs.path.joinZ(gpa, &.{
+                    base_dir_path,
+                    cfg.getAssetsDirPath(),
+                }),
+                try std.fs.path.joinZ(gpa, &.{
+                    base_dir_path,
+                    cfg.getLayoutsDirPath(),
+                }),
+            },
+        );
+    }
     switch (cfg.site) {
         .simple => |s| try dirs_to_watch.append(
             gpa,
@@ -133,6 +161,16 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
         },
     }
 
+    var build_lock: Io.RwLock = .init;
+    var build: Build = undefined;
+    if (docs_preview) {
+        // Theme directories are created by the build. The watcher opens them,
+        // so the first docs build has to finish before it starts. Missing
+        // built-in files are written; files already in `.zdoc-theme/` stay,
+        // so a stylesheet edited before the server starts is not erased.
+        build = serveBuild(io, gpa, &cfg, base_dir_path, &cmd, docs_theme_dir, true);
+    }
+
     var watcher: Watcher = .init(
         io,
         gpa,
@@ -145,13 +183,9 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
         .{@errorName(err)},
     );
 
-    var build_lock: Io.RwLock = .init;
-    var build = root.run(io, gpa, &cfg, .{
-        .base_dir_path = base_dir_path,
-        .build_assets = &cmd.build_assets,
-        .drafts = cmd.drafts,
-        .mode = .memory,
-    }) catch fatal.oom();
+    if (!docs_preview) {
+        build = serveBuild(io, gpa, &cfg, base_dir_path, &cmd, null, false);
+    }
 
     var server: Server = .init(io, gpa, &channel, &build, &build_lock);
     server.start(cmd) catch |err| fatal.msg(
@@ -193,13 +227,9 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
         switch (event) {
             .change => {
                 build_lock.lock(io) catch unreachable;
+                if (docs_preview) debouncer.hold();
                 build.deinit(io, gpa);
-                build = root.run(io, gpa, &cfg, .{
-                    .base_dir_path = base_dir_path,
-                    .build_assets = &cmd.build_assets,
-                    .drafts = cmd.drafts,
-                    .mode = .memory,
-                }) catch fatal.oom();
+                build = serveBuild(io, gpa, &cfg, base_dir_path, &cmd, docs_theme_dir, docs_preview);
                 build_lock.unlock(io);
 
                 for (websockets.entries.items(.value)) |*conn| {
@@ -212,6 +242,7 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
                         );
                     };
                 }
+                if (docs_preview) debouncer.release();
             },
             .connect => |ws| {
                 var conn = ws;
@@ -301,6 +332,77 @@ pub fn serve(io: Io, gpa: Allocator, args: []const []const u8) error{OutOfMemory
             },
         }
     }
+}
+
+/// Whether `zine.ziggy` can be found in this directory or a parent.
+///
+/// The walk matches `Config.load`, so a Zine project started from a
+/// subdirectory keeps the server it has today. A missing file is the docs
+/// preview; any other error is left for `Config.load` to report.
+fn zineConfigExists(io: Io, gpa: Allocator) bool {
+    const cwd_path = std.process.currentPathAlloc(io, gpa) catch |err| {
+        fatal.msg("error while trying to get the cwd path: {s}\n", .{
+            @errorName(err),
+        });
+    };
+    defer gpa.free(cwd_path);
+
+    var dir_path: []const u8 = cwd_path;
+    while (true) {
+        const joined_path = std.fs.path.join(gpa, &.{
+            dir_path,
+            "zine.ziggy",
+        }) catch fatal.oom();
+        defer gpa.free(joined_path);
+
+        var file = Io.Dir.cwd().openFile(io, joined_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => {
+                dir_path = std.fs.path.dirname(dir_path) orelse return false;
+                continue;
+            },
+            else => return true,
+        };
+        file.close(io);
+        return true;
+    }
+}
+
+/// Whether every file under `child` is also under `parent`.
+///
+/// Both paths are the relative paths stored in the config, not absolute ones.
+/// `.` is the current directory, so it covers every relative child.
+fn dirCovers(parent: []const u8, child: []const u8) bool {
+    if (std.mem.eql(u8, parent, child)) return true;
+    if (std.mem.eql(u8, parent, ".")) {
+        return child.len > 0 and !std.fs.path.isAbsolute(child);
+    }
+    if (!std.mem.startsWith(u8, child, parent)) return false;
+    if (child.len == parent.len) return true;
+    const sep = child[parent.len];
+    return sep == '/' or sep == '\\';
+}
+
+/// `keep_theme` is set on docs rebuilds. The first build installs the
+/// built-in theme; a later one must leave `.zdoc-theme/` alone, because the
+/// edit that triggered it is already in that directory and a fresh install
+/// would replace it before the build reads it.
+fn serveBuild(
+    io: Io,
+    gpa: Allocator,
+    cfg: *const root.Config,
+    base_dir_path: []const u8,
+    cmd: *const Command,
+    theme_dir: ?[]const u8,
+    keep_theme: bool,
+) Build {
+    return root.run(io, gpa, cfg, .{
+        .base_dir_path = base_dir_path,
+        .build_assets = &cmd.build_assets,
+        .drafts = cmd.drafts,
+        .mode = .memory,
+        .theme_dir = theme_dir,
+        .theme_keep_existing = keep_theme,
+    }) catch fatal.oom();
 }
 
 pub const Command = struct {
@@ -624,8 +726,17 @@ pub const Server = struct {
         var path_with_query = req.head.target;
 
         if (std.mem.indexOf(u8, path_with_query, "..")) |_| {
-            std.debug.print("'..' not allowed in URLs\n", .{});
-            @panic("TODO: check if '..' is fine");
+            req.respond("path is not allowed\n", .{
+                .status = .bad_request,
+                .extra_headers = &.{
+                    .{ .name = "content-type", .value = "text/plain" },
+                    .{ .name = "connection", .value = "close" },
+                },
+            }) catch |err| log.debug(
+                "error while sending http response: {}",
+                .{err},
+            );
+            return;
         }
 
         if (std.mem.indexOfScalar(u8, path_with_query, '%')) |_| {
@@ -1064,6 +1175,9 @@ pub const Debouncer = struct {
     cascade_mutex: Io.Mutex = .init,
     cascade_condition: Io.Condition = .init,
     cascade_start_ms: i64 = 0,
+    /// Docs preview only. Theme installation writes into a watched directory
+    /// on every build; those events must not schedule another build.
+    suppress: bool = false,
     channel: *Channel(ServeEvent),
 
     /// Thread-safe. To be called when a new event comes in
@@ -1071,9 +1185,33 @@ pub const Debouncer = struct {
         {
             d.cascade_mutex.lock(d.io) catch unreachable;
             defer d.cascade_mutex.unlock(d.io);
+            if (d.suppress) return;
             d.cascade_start_ms = Io.Clock.awake.now(d.io).toMilliseconds();
         }
         d.cascade_condition.signal(d.io);
+    }
+
+    /// Drop watcher events until `release`. Also cancels a cascade that
+    /// already started, so a theme write cannot land in the channel.
+    fn hold(d: *Debouncer) void {
+        d.cascade_mutex.lock(d.io) catch unreachable;
+        defer d.cascade_mutex.unlock(d.io);
+        d.suppress = true;
+        d.cascade_start_ms = 0;
+    }
+
+    /// macOS delivers FSEvents after the stream latency (50ms). Keep ignoring
+    /// them briefly so the writes from the build that just finished do not
+    /// schedule a second one.
+    fn release(d: *Debouncer) void {
+        d.io.sleep(.fromMilliseconds(200), .awake) catch |err| fatal.msg(
+            "error: unable to resume the file watcher: {s}",
+            .{@errorName(err)},
+        );
+        d.cascade_mutex.lock(d.io) catch unreachable;
+        defer d.cascade_mutex.unlock(d.io);
+        d.cascade_start_ms = 0;
+        d.suppress = false;
     }
 
     pub fn start(d: *Debouncer) !void {
@@ -1092,12 +1230,22 @@ pub const Debouncer = struct {
             }
             // cascade != 0
             while (true) {
+                // `hold` zeroes this from the server thread. A zero timestamp
+                // is not the start of a window.
+                if (d.cascade_start_ms == 0 or d.suppress) break;
                 const time_passed = Io.Clock.awake.now(d.io).toMilliseconds() - d.cascade_start_ms;
                 if (time_passed >= d.cascade_window_ms) break;
                 d.cascade_mutex.unlock(d.io);
                 const sleep_ms = d.cascade_window_ms - time_passed;
                 try d.io.sleep(.fromMilliseconds(sleep_ms), .awake);
                 try d.cascade_mutex.lock(d.io);
+            }
+
+            // A docs rebuild cancels the cascade from under us. Committing
+            // it would rebuild again because the build wrote theme files.
+            if (d.cascade_start_ms == 0 or d.suppress) {
+                d.cascade_start_ms = 0;
+                continue;
             }
 
             // We have slept enough, "commit" the cascade window and

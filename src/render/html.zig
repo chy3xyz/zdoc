@@ -31,6 +31,14 @@ const TaskState = struct {
     checked: bool,
 };
 
+fn listHasTasks(node: supermd.Node) bool {
+    var child = node.firstChild();
+    while (child) |item| : (child = item.nextSibling()) {
+        if (taskState(item).is_task) return true;
+    }
+    return false;
+}
+
 fn taskState(node: supermd.Node) TaskState {
     const checked = c.cmark_gfm_extensions_get_tasklist_item_checked(node.n);
     if (checked) return .{ .is_task = true, .checked = true };
@@ -43,6 +51,347 @@ fn taskState(node: supermd.Node) TaskState {
 }
 
 const log = std.log.scoped(.render);
+
+fn eqlIgnoreCase(lhs: []const u8, rhs: []const u8) bool {
+    return lhs.len == rhs.len and std.ascii.eqlIgnoreCase(lhs, rhs);
+}
+
+fn dataUrlAllowed(rest: []const u8) bool {
+    const kinds = [_][]const u8{ "image/", "audio/", "video/" };
+    for (kinds) |kind| {
+        if (rest.len >= kind.len and eqlIgnoreCase(rest[0..kind.len], kind)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Rejects URL schemes that execute code when followed or embedded.
+///
+/// Relative URLs, fragments and protocol-relative URLs have no scheme and are
+/// always allowed. `data:` is only allowed for media, where the browser treats
+/// it as an image/audio/video source rather than a document.
+fn isUnsafeUrl(url: []const u8, allow_data: bool) bool {
+    const s = std.mem.trimStart(u8, url, " \t\r\n");
+    const colon = std.mem.indexOfScalar(u8, s, ':') orelse return false;
+    const boundary = std.mem.indexOfAny(u8, s, "/?#") orelse s.len;
+    // A colon after a path/query/fragment separator is part of the path, not
+    // a scheme.
+    if (colon >= boundary) return false;
+
+    const scheme = s[0..colon];
+    if (eqlIgnoreCase(scheme, "http") or
+        eqlIgnoreCase(scheme, "https") or
+        eqlIgnoreCase(scheme, "mailto") or
+        eqlIgnoreCase(scheme, "tel") or
+        eqlIgnoreCase(scheme, "ftp")) return false;
+
+    if (allow_data and eqlIgnoreCase(scheme, "data")) {
+        return !dataUrlAllowed(s[colon + 1 ..]);
+    }
+    return true;
+}
+
+/// Writes a URL into a double-quoted attribute, escaping it and refusing
+/// executable schemes.
+fn writeUrlAttribute(w: *Writer, url: []const u8, allow_data: bool) !void {
+    if (isUnsafeUrl(url, allow_data)) {
+        try w.writeAll("#");
+        return;
+    }
+    try w.print("{f}", .{HtmlSafe{ .bytes = url }});
+}
+
+fn isHtmlNameStart(ch: u8) bool {
+    return std.ascii.isAlphabetic(ch) or ch == '_' or ch == ':';
+}
+
+fn isHtmlNameChar(ch: u8) bool {
+    return std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == ':' or ch == '.';
+}
+
+fn isHtmlSpace(ch: u8) bool {
+    return ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n' or ch == '\x0c';
+}
+
+fn tagName(tag: []const u8) []const u8 {
+    var i: usize = 1;
+    if (i < tag.len and tag[i] == '/') i += 1;
+    const start = i;
+    while (i < tag.len and isHtmlNameChar(tag[i])) i += 1;
+    return tag[start..i];
+}
+
+fn isRawTextTag(tag: []const u8) bool {
+    const name = tagName(tag);
+    return eqlIgnoreCase(name, "script") or eqlIgnoreCase(name, "style");
+}
+
+fn findCloseTag(src: []const u8, start: usize, name: []const u8) ?usize {
+    var i = start;
+    while (i + 2 + name.len <= src.len) : (i += 1) {
+        if (src[i] != '<' or src[i + 1] != '/') continue;
+        if (!eqlIgnoreCase(src[i + 2 .. i + 2 + name.len], name)) continue;
+        var j = i + 2 + name.len;
+        while (j < src.len and src[j] != '>') j += 1;
+        return if (j < src.len) j + 1 else src.len;
+    }
+    return null;
+}
+
+/// Writes a URL found inside a raw HTML attribute. Root-relative paths get the
+/// site's URL prefix; external, protocol-relative and relative URLs are left
+/// untouched. Assets referenced this way are not analyzed, so they should live
+/// under `static/`.
+fn writeRawHtmlUrl(
+    ctx: *const context.Root,
+    page: *const context.Page,
+    w: *Writer,
+    url: []const u8,
+) !void {
+    if (url.len > 1 and url[0] == '/' and url[1] != '/') {
+        try printAssetUrlPrefix(ctx, page, w);
+        try w.writeAll(url[1..]);
+    } else {
+        try w.writeAll(url);
+    }
+}
+
+/// Rewrites `href`/`src`/`poster` attributes of one tag. The tag text is
+/// otherwise preserved byte for byte.
+fn writeRawHtmlTag(
+    ctx: *const context.Root,
+    page: *const context.Page,
+    w: *Writer,
+    tag: []const u8,
+) !void {
+    var i: usize = 1;
+    if (i < tag.len and tag[i] == '/') i += 1;
+    while (i < tag.len and isHtmlNameChar(tag[i])) i += 1;
+    try w.writeAll(tag[0..i]);
+
+    while (i < tag.len) {
+        if (!isHtmlNameStart(tag[i])) {
+            try w.writeByte(tag[i]);
+            i += 1;
+            continue;
+        }
+
+        const start = i;
+        while (i < tag.len and isHtmlNameChar(tag[i])) i += 1;
+        const attr = tag[start..i];
+        const rewrite = eqlIgnoreCase(attr, "href") or
+            eqlIgnoreCase(attr, "src") or
+            eqlIgnoreCase(attr, "poster");
+
+        if (!rewrite) {
+            try w.writeAll(attr);
+            continue;
+        }
+
+        try w.writeAll(attr);
+        while (i < tag.len and isHtmlSpace(tag[i])) : (i += 1) try w.writeByte(tag[i]);
+        if (i >= tag.len or tag[i] != '=') continue;
+        try w.writeByte('=');
+        i += 1;
+        while (i < tag.len and isHtmlSpace(tag[i])) : (i += 1) try w.writeByte(tag[i]);
+
+        if (i < tag.len and (tag[i] == '"' or tag[i] == '\'')) {
+            const quote = tag[i];
+            try w.writeByte(quote);
+            i += 1;
+            const value_start = i;
+            while (i < tag.len and tag[i] != quote) i += 1;
+            try writeRawHtmlUrl(ctx, page, w, tag[value_start..i]);
+            if (i < tag.len) {
+                try w.writeByte(quote);
+                i += 1;
+            }
+        } else {
+            const value_start = i;
+            while (i < tag.len and !isHtmlSpace(tag[i]) and tag[i] != '>') i += 1;
+            try writeRawHtmlUrl(ctx, page, w, tag[value_start..i]);
+        }
+    }
+}
+
+/// Emits raw HTML, applying the site URL prefix to root-relative `href`/`src`
+/// attributes. Script and style bodies, comments and declarations are copied
+/// verbatim.
+fn writeRawHtml(
+    ctx: *const context.Root,
+    page: *const context.Page,
+    w: *Writer,
+    src: []const u8,
+) !void {
+    var i: usize = 0;
+    while (i < src.len) {
+        if (src[i] != '<') {
+            try w.writeByte(src[i]);
+            i += 1;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, src[i..], "<!--")) {
+            const end = std.mem.indexOfPos(u8, src, i + 4, "-->") orelse src.len;
+            const stop = if (end == src.len) end else end + 3;
+            try w.writeAll(src[i..stop]);
+            i = stop;
+            continue;
+        }
+
+        var j = i + 1;
+        var quote: u8 = 0;
+        while (j < src.len) : (j += 1) {
+            const ch = src[j];
+            if (quote != 0) {
+                if (ch == quote) quote = 0;
+            } else switch (ch) {
+                '"', '\'' => quote = ch,
+                '>' => break,
+                else => {},
+            }
+        }
+        if (j >= src.len) {
+            try w.writeAll(src[i..]);
+            break;
+        }
+
+        const tag = src[i .. j + 1];
+        if (tag.len >= 2 and (tag[1] == '!' or tag[1] == '?')) {
+            try w.writeAll(tag);
+            i = j + 1;
+            continue;
+        }
+
+        if (isRawTextTag(tag)) {
+            // Rewrite the opening tag (a `<script src="/...">` still needs
+            // the prefix), then copy the script/style body and closing tag
+            // verbatim.
+            try writeRawHtmlTag(ctx, page, w, tag);
+            const name = tagName(tag);
+            const end = findCloseTag(src, j + 1, name) orelse src.len;
+            try w.writeAll(src[j + 1 .. end]);
+            i = end;
+            continue;
+        }
+
+        try writeRawHtmlTag(ctx, page, w, tag);
+        i = j + 1;
+    }
+}
+
+/// Writes the part of a link URL after the path.
+///
+/// A plain fragment is stored without its `#`; a query string (optionally
+/// followed by `#fragment`) is stored with its leading `?` so it lands before
+/// the fragment in the output URL.
+fn writeLinkSuffix(w: *Writer, suffix: []const u8) !void {
+    if (suffix.len > 0 and suffix[0] == '?') {
+        try w.print("{f}", .{HtmlSafe{ .bytes = suffix }});
+    } else {
+        try w.print("#{f}", .{HtmlSafe{ .bytes = suffix }});
+    }
+}
+
+/// Escapes a path that was formatted into `fmt` before writing it.
+fn writeFmtEscaped(w: *Writer, comptime fmt: []const u8, args: anytype) !void {
+    var aw: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+    defer aw.deinit();
+    try aw.writer.print(fmt, args);
+    try w.print("{f}", .{HtmlSafe{ .bytes = aw.written() }});
+}
+
+fn writeAttrs(w: *Writer, attrs: []const []const u8) !void {
+    try w.writeAll(" class=\"");
+    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
+    try w.writeAll("\"");
+}
+
+/// Parsed metadata from a fenced code block info string.
+const FenceMeta = struct {
+    lang: []const u8,
+    title: ?[]const u8 = null,
+    /// The raw contents of a `{1,3-5}` line specification, without braces.
+    highlight: ?[]const u8 = null,
+};
+
+/// Parses a code fence info string.
+///
+/// The first whitespace-separated token is the language. VitePress-style
+/// metadata may follow it: `title="..."` (the quotes keep spaces in the
+/// title together) or `title=name`, plus a `{1,3-5}` line specification.
+/// Unknown tokens are ignored so other tools' metadata never breaks a page.
+fn parseFenceMeta(info: []const u8) FenceMeta {
+    var meta: FenceMeta = .{ .lang = "" };
+    var i: usize = 0;
+    var first = true;
+
+    while (i < info.len) {
+        while (i < info.len and std.ascii.isWhitespace(info[i])) i += 1;
+        if (i >= info.len) break;
+
+        const start = i;
+        var quote: u8 = 0;
+        while (i < info.len) : (i += 1) {
+            const ch = info[i];
+            if (quote != 0) {
+                if (ch == '\\' and i + 1 < info.len) {
+                    i += 1;
+                } else if (ch == quote) {
+                    quote = 0;
+                }
+            } else if (ch == '"' or ch == '\'') {
+                quote = ch;
+            } else if (std.ascii.isWhitespace(ch)) {
+                break;
+            }
+        }
+
+        const token = info[start..i];
+        if (first) {
+            meta.lang = token;
+            first = false;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, token, "title=")) {
+            meta.title = unquoteFenceValue(token["title=".len..]);
+        } else if (token.len >= 2 and token[0] == '{' and token[token.len - 1] == '}') {
+            meta.highlight = token[1 .. token.len - 1];
+        }
+    }
+
+    return meta;
+}
+
+fn unquoteFenceValue(value: []const u8) []const u8 {
+    if (value.len >= 2) {
+        const q = value[0];
+        if ((q == '"' or q == '\'') and value[value.len - 1] == q) {
+            return value[1 .. value.len - 1];
+        }
+    }
+    return value;
+}
+
+/// Writes TeX destined for a `<script type="math/tex">` element. The HTML
+/// parser ends the element at `</script`, even inside script data, so that
+/// sequence must not appear verbatim.
+fn writeMathTex(w: *Writer, code: []const u8) !void {
+    var i: usize = 0;
+    while (i < code.len) {
+        if (i + 8 <= code.len and code[i] == '<' and code[i + 1] == '/' and
+            eqlIgnoreCase(code[i + 2 .. i + 8], "script"))
+        {
+            try w.writeAll("<\\/");
+            i += 2;
+            continue;
+        }
+        try w.writeByte(code[i]);
+        i += 1;
+    }
+}
 
 pub fn html(
     gpa: std.mem.Allocator,
@@ -72,6 +421,8 @@ pub fn html(
     var table_in_header = false;
     var table_alignments: []const u8 = &.{};
     var table_cell_id: usize = 0;
+    var table_head_open = false;
+    var table_body_open = false;
     while (event) |ev| : (event = it.next()) {
         // const loop_zone = tracy.traceNamed(@src(), "html-event");
         // defer loop_zone.end();
@@ -120,10 +471,10 @@ pub fn html(
                         try w.writeAll("<div");
                     }
 
-                    if (d.id) |id| try w.print(" id=\"{s}\"", .{id});
+                    if (d.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                     try w.print(" class=\"block", .{});
                     if (d.attrs) |attrs| {
-                        for (attrs) |attr| try w.print(" {s}", .{attr});
+                        for (attrs) |attr| try w.print(" {f}", .{HtmlSafe{ .bytes = attr }});
                     }
                     try w.print("\">", .{});
                 },
@@ -141,9 +492,20 @@ pub fn html(
                 },
             },
             .LIST => switch (ev.dir) {
-                .enter => try w.print("<{s}>", .{
-                    @tagName(node.listType()),
-                }),
+                .enter => {
+                    if (node.listType() == .ol) {
+                        const list_start = c.cmark_node_get_list_start(node.n);
+                        if (list_start > 1) {
+                            try w.print("<ol start=\"{d}\"", .{list_start});
+                        } else {
+                            try w.writeAll("<ol");
+                        }
+                    } else {
+                        try w.writeAll("<ul");
+                    }
+                    if (listHasTasks(node)) try w.writeAll(" class=\"contains-task-list\"");
+                    try w.writeAll(">");
+                },
                 .exit => try w.print("</{s}>", .{
                     @tagName(node.listType()),
                 }),
@@ -155,7 +517,7 @@ pub fn html(
                     const task = taskState(node);
                     if (task.is_task) {
                         try w.print(
-                            "<li class=\"task-list-item\"><input type=\"checkbox\" disabled{s}>",
+                            "<li class=\"task-list-item\"><input class=\"task-list-item-checkbox\" type=\"checkbox\" disabled{s}> ",
                             .{if (task.checked) " checked" else ""},
                         );
                     } else {
@@ -165,9 +527,11 @@ pub fn html(
                 .exit => try w.print("</li>", .{}),
             },
             .HTML_BLOCK => switch (ev.dir) {
-                .enter => try w.print(
-                    "{s}",
-                    .{node.literal() orelse ""},
+                .enter => try writeRawHtml(
+                    ctx,
+                    page,
+                    w,
+                    node.literal() orelse "",
                 ),
                 .exit => {},
             },
@@ -188,12 +552,8 @@ pub fn html(
                             }
                             open_div = true;
                             try w.print("<div", .{});
-                            if (d.id) |id| try w.print(" id=\"{s}\"", .{id});
-                            if (d.attrs) |attrs| {
-                                try w.print(" class=\"", .{});
-                                for (attrs) |attr| try w.print("{s} ", .{attr});
-                                try w.print("\"", .{});
-                            }
+                            if (d.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
+                            if (d.attrs) |attrs| try writeAttrs(w, attrs);
 
                             try w.print(">", .{});
                             _ = it.next();
@@ -231,12 +591,8 @@ pub fn html(
                         .heading => {
                             const lvl = node.headingLevel() + @intFromBool(ctx._meta.build.cfg.supermd.headings_h2);
                             try w.print("<h{}", .{lvl});
-                            if (d.id) |id| try w.print(" id=\"{s}\"", .{id});
-                            if (d.attrs) |attrs| {
-                                try w.print(" class=\"", .{});
-                                for (attrs) |attr| try w.print("{s} ", .{attr});
-                                try w.print("\"", .{});
-                            }
+                            if (d.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
+                            if (d.attrs) |attrs| try writeAttrs(w, attrs);
 
                             try w.print(">", .{});
                             continue;
@@ -247,12 +603,8 @@ pub fn html(
                             }
                             open_div = true;
                             try w.print("<div", .{});
-                            if (d.id) |id| try w.print(" id=\"{s}\"", .{id});
-                            if (d.attrs) |attrs| {
-                                try w.print(" class=\"", .{});
-                                for (attrs) |attr| try w.print("{s} ", .{attr});
-                                try w.print("\"", .{});
-                            }
+                            if (d.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
+                            if (d.attrs) |attrs| try writeAttrs(w, attrs);
 
                             try w.print(">", .{});
                         },
@@ -301,19 +653,22 @@ pub fn html(
                 .exit => {},
             },
             .HTML_INLINE => switch (ev.dir) {
-                .enter => try w.print(
-                    "{s}",
-                    .{node.literal() orelse ""},
+                .enter => try writeRawHtml(
+                    ctx,
+                    page,
+                    w,
+                    node.literal() orelse "",
                 ),
-                .exit => @panic("custom inline"),
+                // cmark emits HTML_INLINE as a leaf; there is no exit event.
+                .exit => {},
             },
             .CUSTOM_INLINE => switch (ev.dir) {
                 .enter => @panic("custom inline"),
                 .exit => {},
             },
             .TEXT => switch (ev.dir) {
-                .enter => try w.print("{s}", .{
-                    node.literal() orelse "",
+                .enter => try w.print("{f}", .{
+                    HtmlSafe{ .bytes = node.literal() orelse "" },
                 }),
                 .exit => {},
             },
@@ -339,39 +694,75 @@ pub fn html(
                 .enter => try w.print("<strong>", .{}),
                 .exit => try w.print("</strong>", .{}),
             },
-            .LINK, .IMAGE => try renderDirective(gpa, ctx, page, ast, ev, w),
+            .LINK, .IMAGE => {
+                // SuperMD attaches an image directive to top-level images,
+                // but it does not analyze the children of a LINK, so an image
+                // inside a link (`[![alt](img)](url)`) has no directive at
+                // all. Both forms are ordinary Markdown images: render them
+                // the same way and skip the alt-text child node.
+                if (node.nodeType() == .IMAGE) {
+                    if (ev.dir == .enter) {
+                        try renderMarkdownImage(ctx, page, node, w);
+                        it.reset(node, .exit);
+                    }
+                    continue;
+                }
+                try renderDirective(gpa, ctx, page, ast, ev, w);
+            },
             .CODE_BLOCK => switch (ev.dir) {
                 .exit => {},
                 .enter => {
                     if (node.literal()) |code| {
                         const fence_info = node.fenceInfo() orelse "";
-                        if (std.mem.trim(u8, fence_info, " \n").len == 0) {
+                        if (std.mem.trim(u8, fence_info, " \t\r\n").len == 0) {
                             try w.print("<pre><code>{f}</code></pre>", .{
                                 HtmlSafe{ .bytes = code },
                             });
                         } else {
-                            var fence_it = std.mem.tokenizeScalar(u8, fence_info, ' ');
-                            const lang_name = fence_it.next().?;
+                            const meta = parseFenceMeta(fence_info);
+                            const lang_name = meta.lang;
 
                             if (std.mem.eql(u8, lang_name, "=html")) {
-                                try w.writeAll(code);
+                                try writeRawHtml(ctx, page, w, code);
                                 continue;
                             } else if (std.mem.eql(u8, lang_name, "=mathtex")) {
                                 try w.writeAll("<script type=\"math/tex\">");
-                                try w.writeAll(code);
+                                try writeMathTex(w, code);
                                 try w.writeAll("</script>");
                                 continue;
                             } else if (std.mem.eql(u8, lang_name, "mermaid")) {
                                 // Diagrams are drawn by mermaid.js in the
                                 // browser, so emit the source as a plain block
                                 // rather than trying to highlight it here.
+                                if (meta.title) |title| {
+                                    try w.writeAll("<figure class=\"code-block\">\n");
+                                    try w.print("<figcaption>{f}</figcaption>\n", .{
+                                        HtmlSafe{ .bytes = title },
+                                    });
+                                }
                                 try w.print("<pre class=\"mermaid\">{f}</pre>", .{
                                     HtmlSafe{ .bytes = code },
                                 });
+                                if (meta.title != null) try w.writeAll("</figure>\n");
                                 continue;
                             }
 
-                            try w.print("<pre><code class=\"{s}\">", .{lang_name});
+                            if (meta.title) |title| {
+                                try w.writeAll("<figure class=\"code-block\">\n");
+                                try w.print("<figcaption>{f}</figcaption>\n", .{
+                                    HtmlSafe{ .bytes = title },
+                                });
+                            }
+
+                            try w.writeAll("<pre");
+                            if (meta.highlight) |hl| {
+                                try w.print(" data-highlight=\"{f}\"", .{
+                                    HtmlSafe{ .bytes = hl },
+                                });
+                            }
+                            try w.print("><code class=\"{f}\">", .{
+                                HtmlSafe{ .bytes = lang_name },
+                            });
 
                             if (std.mem.eql(u8, lang_name, "console")) {
                                 try highlight.runConsole(w, code);
@@ -406,44 +797,64 @@ pub fn html(
                             }
 
                             try w.writeAll("</code></pre>\n");
+                            if (meta.title != null) try w.writeAll("</figure>\n");
                         }
                     }
                 },
             },
 
-            else => |nt| if (@intFromEnum(nt) == c.CMARK_NODE_STRIKETHROUGH) switch (ev.dir) {
+            else => |nt| if (@backingInt(nt) == c.CMARK_NODE_STRIKETHROUGH) switch (ev.dir) {
                 .enter => try w.writeAll("<del>"),
                 .exit => try w.writeAll("</del>"),
-            } else if (@intFromEnum(nt) == c.CMARK_NODE_TABLE) switch (ev.dir) {
+            } else if (@backingInt(nt) == c.CMARK_NODE_TABLE) switch (ev.dir) {
                 .enter => {
                     table_alignments = node.getTableAlignments();
+                    table_head_open = false;
+                    table_body_open = false;
                     try w.writeAll("<table>");
                 },
                 .exit => {
+                    if (table_body_open) {
+                        try w.writeAll("</tbody>");
+                    } else if (table_head_open) {
+                        try w.writeAll("</thead>");
+                    }
                     table_alignments = &.{};
+                    table_head_open = false;
+                    table_body_open = false;
                     try w.writeAll("</table>");
                 },
-            } else if (@intFromEnum(nt) == c.CMARK_NODE_TABLE_ROW) switch (ev.dir) {
+            } else if (@backingInt(nt) == c.CMARK_NODE_TABLE_ROW) switch (ev.dir) {
                 .enter => {
                     table_in_header = node.isTableHeader();
+                    if (table_in_header) {
+                        if (!table_head_open) {
+                            try w.writeAll("<thead>");
+                            table_head_open = true;
+                        }
+                    } else if (!table_body_open) {
+                        if (table_head_open) try w.writeAll("</thead>");
+                        try w.writeAll("<tbody>");
+                        table_body_open = true;
+                    }
                     try w.writeAll("<tr>");
                 },
                 .exit => {
-                    table_in_header = !node.isTableHeader();
+                    table_in_header = false;
                     table_cell_id = 0;
                     try w.writeAll("</tr>");
                 },
-            } else if (@intFromEnum(nt) == c.CMARK_NODE_TABLE_CELL) switch (ev.dir) {
+            } else if (@backingInt(nt) == c.CMARK_NODE_TABLE_CELL) switch (ev.dir) {
                 .enter => {
                     if (table_in_header) {
-                        try w.writeAll("<th");
+                        try w.writeAll("<th scope=\"col\"");
                     } else {
                         try w.writeAll("<td");
                     }
 
                     if (table_cell_id < table_alignments.len) {
                         const char = table_alignments[table_cell_id];
-                        if (char != 0) try w.print(" align='{s}'", .{
+                        if (char != 0) try w.print(" style=\"text-align:{s}\"", .{
                             switch (char) {
                                 else => unreachable,
                                 'l' => "left",
@@ -474,6 +885,42 @@ pub fn html(
     }
 }
 
+/// Renders a standard Markdown image. The image's child node is its alt text,
+/// not a caption, so it is deliberately not rendered as body content.
+fn renderMarkdownImage(
+    ctx: *const context.Root,
+    page: *const context.Page,
+    node: supermd.Node,
+    w: *Writer,
+) !void {
+    const fallback_src = node.link() orelse "";
+
+    try w.writeAll("<img src=\"");
+    if (node.getDirective()) |d| switch (d.kind) {
+        .image => |img| if (img.src) |src| {
+            try printUrl(ctx, page, src, w, true);
+        } else {
+            try writeUrlAttribute(w, fallback_src, true);
+        },
+        else => try writeUrlAttribute(w, fallback_src, true),
+    } else try writeUrlAttribute(w, fallback_src, true);
+    try w.writeAll("\"");
+
+    const alt = std.mem.trim(u8, node.renderPlaintext() catch "", " \t\r\n");
+    if (alt.len != 0) try w.print(" alt=\"{f}\"", .{HtmlSafe{ .bytes = alt }});
+    if (node.title()) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
+
+    if (node.getDirective()) |d| switch (d.kind) {
+        .image => |img| if (img.size) |size| {
+            if (size.w > 0) try w.print(" width=\"{d}\"", .{size.w});
+            if (size.h > 0) try w.print(" height=\"{d}\"", .{size.h});
+        },
+        else => {},
+    };
+
+    try w.writeAll(">");
+}
+
 fn renderDirective(
     gpa: std.mem.Allocator,
     ctx: *const context.Root,
@@ -492,15 +939,15 @@ fn renderDirective(
         .mathtex => |katek| switch (ev.dir) {
             .enter => {
                 try w.writeAll("<script type=\"math/tex\"");
-                if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                 if (directive.attrs) |attrs| {
                     try w.writeAll(" class=\"");
-                    for (attrs) |attr| try w.print("{s} ", .{attr});
+                    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     try w.writeAll("\"");
                 }
-                if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                 try w.writeAll(">");
-                try w.writeAll(katek.formula);
+                try writeMathTex(w, katek.formula);
             },
             .exit => {
                 try w.writeAll("</script>");
@@ -509,13 +956,13 @@ fn renderDirective(
         .text => switch (ev.dir) {
             .enter => {
                 try w.print("<span", .{});
-                if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                 if (directive.attrs) |attrs| {
                     try w.print(" class=\"", .{});
-                    for (attrs) |attr| try w.print("{s} ", .{attr});
+                    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     try w.print("\"", .{});
                 }
-                if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                 try w.print(">", .{});
             },
             .exit => {
@@ -524,27 +971,38 @@ fn renderDirective(
         },
         .image => |img| switch (ev.dir) {
             .enter => {
-                const caption = node.firstChild();
+                // A standard `![alt](src)` image carries its alt text as a
+                // child. SuperMD's `[caption]($image...)` link also has a
+                // child, but there it is a visible caption. The node type is
+                // what tells the two syntaxes apart.
+                const is_markdown_image = node.nodeType() == .IMAGE;
+                const caption = if (is_markdown_image) null else node.firstChild();
                 if (caption != null) try w.writeAll("<figure>");
                 if (img.linked) |l| if (l) {
                     try w.writeAll("<a href=\"");
-                    try printUrl(ctx, page, img.src.?, w);
+                    try printUrl(ctx, page, img.src.?, w, true);
                     try w.writeAll("\">");
                 };
 
                 try w.writeAll("<img");
-                if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                 if (directive.attrs) |attrs| {
                     try w.writeAll(" class=\"");
-                    for (attrs) |attr| try w.print("{s} ", .{attr});
+                    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     try w.writeAll("\"");
                 }
-                if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                 try w.writeAll(" src=\"");
-                try printUrl(ctx, page, img.src.?, w);
+                try printUrl(ctx, page, img.src.?, w, true);
                 try w.writeAll("\"");
 
-                if (img.alt) |alt| try w.print(" alt=\"{s}\"", .{alt});
+                if (is_markdown_image) {
+                    const alt = node.renderPlaintext() catch "";
+                    if (alt.len != 0) try w.print(" alt=\"{f}\"", .{HtmlSafe{ .bytes = alt }});
+                    if (node.title()) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
+                } else if (img.alt) |alt| {
+                    try w.print(" alt=\"{f}\"", .{HtmlSafe{ .bytes = alt }});
+                }
                 if (img.size) |size| {
                     if (size.w > 0) try w.print(" width=\"{d}\"", .{size.w});
                     if (size.h > 0) try w.print(" height=\"{d}\"", .{size.h});
@@ -554,7 +1012,8 @@ fn renderDirective(
                 if (caption != null) try w.writeAll("\n<figcaption>");
             },
             .exit => {
-                const caption = node.firstChild();
+                const is_markdown_image = node.nodeType() == .IMAGE;
+                const caption = if (is_markdown_image) null else node.firstChild();
                 if (caption != null) {
                     try w.writeAll("</figcaption></figure>");
                 }
@@ -565,13 +1024,13 @@ fn renderDirective(
                 const caption = node.firstChild();
                 if (caption != null) try w.writeAll("<figure>");
                 try w.writeAll("<video");
-                if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                 if (directive.attrs) |attrs| {
                     try w.writeAll(" class=\"");
-                    for (attrs) |attr| try w.print("{s} ", .{attr});
+                    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     try w.writeAll("\"");
                 }
-                if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                 if (vid.loop) |val| if (val) try w.writeAll(" loop");
                 if (vid.autoplay) |val| if (val) try w.writeAll(" autoplay");
                 if (vid.muted) |val| if (val) try w.writeAll(" muted");
@@ -580,7 +1039,7 @@ fn renderDirective(
                     try w.writeAll(" disablepictureinpicture");
                 };
                 try w.writeAll(">\n<source src=\"");
-                try printUrl(ctx, page, vid.src.?, w);
+                try printUrl(ctx, page, vid.src.?, w, true);
                 try w.writeAll("\">\n</video>");
                 if (caption != null) try w.writeAll("\n<figcaption>");
             },
@@ -596,13 +1055,13 @@ fn renderDirective(
                 const caption = node.firstChild();
                 if (caption != null) try w.writeAll("<figure>");
                 try w.writeAll("<audio");
-                if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                 if (directive.attrs) |attrs| {
                     try w.writeAll(" class=\"");
-                    for (attrs) |attr| try w.print("{s} ", .{attr});
+                    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     try w.writeAll("\"");
                 }
-                if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                 if (snd.loop) |val| if (val) try w.writeAll(" loop");
                 if (snd.autoplay) |val| if (val) try w.writeAll(" autoplay");
                 if (snd.muted) |val| if (val) try w.writeAll(" muted");
@@ -610,7 +1069,7 @@ fn renderDirective(
                     try w.writeAll(" controls");
                 }
                 try w.writeAll(">\n<source src=\"");
-                try printUrl(ctx, page, snd.src.?, w);
+                try printUrl(ctx, page, snd.src.?, w, true);
                 try w.writeAll("\">\n</audio>");
                 if (caption != null) try w.writeAll("\n<figcaption>");
             },
@@ -624,21 +1083,23 @@ fn renderDirective(
         .link => |lnk| switch (ev.dir) {
             .enter => {
                 try w.writeAll("<a");
-                if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                 if (directive.attrs) |attrs| {
                     try w.writeAll(" class=\"");
-                    for (attrs) |attr| try w.print("{s} ", .{attr});
+                    for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     try w.writeAll("\"");
                 }
 
-                if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                if (directive.title orelse node.title()) |t| {
+                    try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
+                }
                 try w.writeAll(" href=\"");
-                try printUrl(ctx, page, lnk.src.?, w);
-                if (lnk.ref) |r| try w.print("#{s}", .{r});
+                try printUrl(ctx, page, lnk.src.?, w, false);
+                if (lnk.ref) |r| try writeLinkSuffix(w, r);
                 try w.writeAll("\"");
 
                 if (lnk.new orelse false) {
-                    try w.writeAll(" target=\"_blank\"");
+                    try w.writeAll(" target=\"_blank\" rel=\"noopener noreferrer\"");
                 }
 
                 try w.writeAll(">");
@@ -653,25 +1114,25 @@ fn renderDirective(
                     try w.writeAll(code.src.?.url);
                 } else if (std.mem.eql(u8, code.language orelse "", "=mathtex")) {
                     try w.writeAll("<script type=\"math/tex\"");
-                    if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                    if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                     if (directive.attrs) |attrs| {
                         if (code.language == null) try w.writeAll(" class=\"");
-                        for (attrs) |attr| try w.print("{s} ", .{attr});
+                        for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     }
 
-                    if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                    if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                     try w.writeAll(">");
                     try w.writeAll(code.src.?.url);
                     try w.writeAll("</script>");
                 } else {
                     try w.writeAll("<pre");
-                    if (directive.id) |id| try w.print(" id=\"{s}\"", .{id});
+                    if (directive.id) |id| try w.print(" id=\"{f}\"", .{HtmlSafe{ .bytes = id }});
                     if (directive.attrs) |attrs| {
                         if (code.language == null) try w.writeAll(" class=\"");
-                        for (attrs) |attr| try w.print("{s} ", .{attr});
+                        for (attrs) |attr| try w.print("{f} ", .{HtmlSafe{ .bytes = attr }});
                     }
 
-                    if (directive.title) |t| try w.print(" title=\"{s}\"", .{t});
+                    if (directive.title) |t| try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
                     try w.print("><code class=\"{?s}\">", .{code.language});
 
                     if (code.language) |lang| {
@@ -717,9 +1178,10 @@ fn printUrl(
     page: *const context.Page,
     src: supermd.context.Src,
     w: *Writer,
+    allow_data: bool,
 ) !void {
     switch (src) {
-        .url => |url| try w.writeAll(url),
+        .url => |url| try writeUrlAttribute(w, url, allow_data),
         .self_page => |alt| if (alt) |a| {
             try ctx.printLinkPrefix(
                 w,
@@ -734,7 +1196,7 @@ fn printUrl(
 
             if (a[0] != '/') {
                 const v = ctx._meta.build.variants[page._scan.variant_id];
-                try w.print("{f}", .{page._scan.url.fmt(
+                try writeFmtEscaped(w, "{f}", .{page._scan.url.fmt(
                     &v.string_table,
                     &v.path_table,
                     null,
@@ -742,7 +1204,9 @@ fn printUrl(
                 )});
             }
 
-            try w.writeAll(std.mem.trimStart(u8, a, "/"));
+            try w.print("{f}", .{
+                HtmlSafe{ .bytes = std.mem.trimStart(u8, a, "/") },
+            });
         },
         .page => |p| {
             try ctx.printLinkPrefix(
@@ -756,20 +1220,20 @@ fn printUrl(
                 page != ctx.page,
             );
 
-            const path: Path = @enumFromInt(p.resolved.path);
+            const path: Path = @fromBackingInt(@intCast(p.resolved.path));
             const v = ctx._meta.build.variants[p.resolved.variant_id];
             if (p.resolved.alt) |a| {
                 if (a[0] != '/') {
-                    try w.print("{f}", .{path.fmt(
+                    try writeFmtEscaped(w, "{f}", .{path.fmt(
                         &v.string_table,
                         &v.path_table,
                         null,
                         true,
                     )});
                 }
-                try w.writeAll(a);
+                try w.print("{f}", .{HtmlSafe{ .bytes = a }});
             } else {
-                try w.print("{f}", .{path.fmt(
+                try writeFmtEscaped(w, "{f}", .{path.fmt(
                     &v.string_table,
                     &v.path_table,
                     null,
@@ -785,12 +1249,12 @@ fn printUrl(
             );
 
             const pn: PathName = .{
-                .path = @enumFromInt(pa.resolved.path),
-                .name = @enumFromInt(pa.resolved.name),
+                .path = @fromBackingInt(@intCast(pa.resolved.path)),
+                .name = @fromBackingInt(@intCast(pa.resolved.name)),
             };
 
             const v = ctx._meta.build.variants[page._scan.variant_id];
-            try w.print("{f}", .{pn.fmt(
+            try writeFmtEscaped(w, "{f}", .{pn.fmt(
                 &v.string_table,
                 &v.path_table,
                 null,
@@ -801,11 +1265,11 @@ fn printUrl(
             try printAssetUrlPrefix(ctx, page, w);
 
             const pn: PathName = .{
-                .path = @enumFromInt(sa.resolved.path),
-                .name = @enumFromInt(sa.resolved.name),
+                .path = @fromBackingInt(@intCast(sa.resolved.path)),
+                .name = @fromBackingInt(@intCast(sa.resolved.name)),
             };
 
-            try w.print("{f}", .{pn.fmt(
+            try writeFmtEscaped(w, "{f}", .{pn.fmt(
                 &ctx._meta.build.st,
                 &ctx._meta.build.pt,
                 null,
@@ -814,7 +1278,7 @@ fn printUrl(
         },
         .build_asset => |ba| {
             try printAssetUrlPrefix(ctx, page, w);
-            try w.print("{s}", .{ba.ref});
+            try w.print("{f}", .{HtmlSafe{ .bytes = ba.ref }});
         },
     }
 }
@@ -866,9 +1330,13 @@ fn renderLink(
     const node = ev.node;
     switch (ev.dir) {
         .enter => {
-            try w.print("<a href=\"{s}\">", .{
-                node.link() orelse "",
-            });
+            try w.writeAll("<a href=\"");
+            try writeUrlAttribute(w, node.link() orelse "", false);
+            try w.writeAll("\"");
+            if (node.title()) |t| {
+                try w.print(" title=\"{f}\"", .{HtmlSafe{ .bytes = t }});
+            }
+            try w.writeAll(">");
         },
         .exit => try w.print("</a>", .{}),
     }
@@ -918,22 +1386,35 @@ pub fn htmlToc(ast: Ast, w: *Writer) !void {
     try w.print("</ul>", .{});
 }
 
+/// Writes the text content of a raw inline HTML fragment, dropping tags.
+///
+/// TOC labels are plain text, so `<kbd>Ctrl</kbd>` should contribute `Ctrl`
+/// rather than the literal markup.
+fn writeStrippedHtml(w: *Writer, fragment: []const u8) !void {
+    var in_tag = false;
+    for (fragment) |ch| {
+        switch (ch) {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            else => if (!in_tag) try w.writeByte(ch),
+        }
+    }
+}
+
 fn tocRenderHeading(heading: supermd.Node, w: *Writer, link: bool) !void {
     var it = Iter.init(heading);
     while (it.next()) |ev| {
         const node = ev.node;
         switch (node.nodeType()) {
-            else => std.debug.panic(
-                "TODO: implement toc '{s}' inline rendering",
-                .{@tagName(node.nodeType())},
-            ),
             .HEADING => switch (ev.dir) {
                 .enter => {
                     const dir = node.getDirective() orelse continue;
                     if (dir.id) |id| {
                         std.debug.assert(id.len > 0);
                         std.debug.assert(std.mem.trim(u8, id, "\t\n\r ").len > 0);
-                        if (link) try w.print("<a href=\"#{s}\">", .{id});
+                        if (link) try w.print("<a href=\"#{f}\">", .{
+                            HtmlSafe{ .bytes = id },
+                        });
                     }
                 },
                 .exit => {
@@ -944,8 +1425,8 @@ fn tocRenderHeading(heading: supermd.Node, w: *Writer, link: bool) !void {
                 },
             },
             .TEXT => switch (ev.dir) {
-                .enter => try w.print("{s}", .{
-                    node.literal() orelse "",
+                .enter => try w.print("{f}", .{
+                    HtmlSafe{ .bytes = node.literal() orelse "" },
                 }),
                 .exit => {},
             },
@@ -972,6 +1453,25 @@ fn tocRenderHeading(heading: supermd.Node, w: *Writer, link: bool) !void {
                 .exit => try w.print("</strong>", .{}),
             },
             .LINK => {},
+            .HTML_INLINE => switch (ev.dir) {
+                .enter => if (node.literal()) |fragment| try writeStrippedHtml(w, fragment),
+                .exit => {},
+            },
+            .IMAGE => {},
+            .FOOTNOTE_REFERENCE => switch (ev.dir) {
+                .enter => try w.print("[{d}]", .{node.footnoteRefIx()}),
+                .exit => {},
+            },
+            // Extension nodes (strikethrough and friends) may carry an enum
+            // value this switch does not know. Do not call `@tagName` on it:
+            // render their text children instead, and fall back to the
+            // literal for leaf nodes.
+            else => switch (ev.dir) {
+                .enter => if (node.literal()) |lit| try w.print("{f}", .{
+                    HtmlSafe{ .bytes = lit },
+                }),
+                .exit => {},
+            },
         }
     }
 }

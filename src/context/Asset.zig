@@ -179,7 +179,19 @@ pub const Builtins = struct {
                     };
                     return Int.init(@intCast(stat.size));
                 },
-                .build => @panic("TODO"),
+                .build => {
+                    const ba = ctx._meta.build.build_assets.getPtr(
+                        asset._meta.ref,
+                    ).?;
+                    const stat = ctx._meta.build.base_dir.statFile(
+                        ctx._meta.io,
+                        ba.input_path,
+                        .{},
+                    ) catch {
+                        return .{ .err = "i/o error while reading asset file" };
+                    };
+                    return Int.init(@intCast(stat.size));
+                },
             }
         }
     };
@@ -315,7 +327,19 @@ pub const Builtins = struct {
                         return .{ .err = "i/o error while reading asset file" };
                     };
                 },
-                .build => @panic("TODO"),
+                .build => blk: {
+                    const ba = ctx._meta.build.build_assets.getPtr(
+                        asset._meta.ref,
+                    ).?;
+                    break :blk ctx._meta.build.base_dir.readFileAlloc(
+                        ctx._meta.io,
+                        ba.input_path,
+                        gpa,
+                        .unlimited,
+                    ) catch {
+                        return .{ .err = "i/o error while reading asset file" };
+                    };
+                },
             };
 
             const sha384 = std.crypto.hash.sha2.Sha384;
@@ -399,7 +423,24 @@ pub const Builtins = struct {
                         },
                     };
                 },
-                .build => @panic("TODO"),
+                .build => blk: {
+                    const ba = ctx._meta.build.build_assets.getPtr(
+                        asset._meta.ref,
+                    ).?;
+                    break :blk .{
+                        ba.input_path,
+                        ctx._meta.build.base_dir.readFileAllocOptions(
+                            ctx._meta.io,
+                            ba.input_path,
+                            gpa,
+                            .unlimited,
+                            .@"1",
+                            0,
+                        ) catch {
+                            return .{ .err = "i/o error while reading asset file" };
+                        },
+                    };
+                },
             };
 
             log.debug("parsing ziggy file: '{s}'", .{data});

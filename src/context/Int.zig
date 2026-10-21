@@ -96,7 +96,9 @@ pub const Builtins = struct {
 
             switch (args[0]) {
                 .int => |add| return Int.init(int.value +| add.value),
-                .float => @panic("TODO: int plus with float argument"),
+                .float => |add| return .{ .float = .{
+                    .value = @as(f64, @floatFromInt(int.value)) + add.value,
+                } },
                 else => return argument_error,
             }
         }
@@ -124,7 +126,9 @@ pub const Builtins = struct {
 
             switch (args[0]) {
                 .int => |subtrahend| return Int.init(int.value -| subtrahend.value),
-                .float => @panic("TODO: int minus with float argument"),
+                .float => |subtrahend| return .{ .float = .{
+                    .value = @as(f64, @floatFromInt(int.value)) - subtrahend.value,
+                } },
                 else => return argument_error,
             }
         }
@@ -158,7 +162,12 @@ pub const Builtins = struct {
 
                     return Int.init(res);
                 },
-                .float => @panic("TODO: div with float argument"),
+                .float => |den| {
+                    if (den.value == 0) return .{ .err = "division by zero" };
+                    return .{ .float = .{
+                        .value = @as(f64, @floatFromInt(int.value)) / den.value,
+                    } };
+                },
                 else => return argument_error,
             }
         }

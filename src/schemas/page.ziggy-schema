@@ -62,6 +62,9 @@ struct Page {
     /// Documentation mode: sorts this page ahead of its siblings in the
     /// sidebar. Pages without one sort by the conventions in their path.
     order: ?int,
+    /// Documentation mode: label used for this page or section in the
+    /// sidebar, overriding the page title.
+    sidebar_label: ?bytes,
     /// Documentation mode: when true, this page is left out of the sidebar.
     /// It is still built and still reachable by URL.
     hidden: ?bool,

@@ -1,7 +1,8 @@
 /*! zdoc default theme.
  *
  * The article is the page: a serif reading column, and a sans-serif rail for
- * finding things. Dark mode follows the OS preference.
+ * finding things. The OS preference applies until the reader chooses, and
+ * `data-theme` on the html element stores that choice.
  */
 
 :root {
@@ -44,8 +45,36 @@
   --tk-constant: #1d4e89;
 }
 
+:root[data-theme="dark"] {
+  --bg: #14191d;
+  --bg-soft: #1c2329;
+  --bg-code: #1c2329;
+  --border: #313a44;
+  --text: #e6ecef;
+  --text-dim: #9aa6b2;
+  --accent: #7ec8c4;
+  --accent-fill: #14656e;
+  --accent-soft: #1a3032;
+  --warn-bg: #2a2418;
+  --warn-border: #8a7040;
+  --warn-text: #e3c98a;
+  --danger-bg: #2c1c1c;
+  --danger-border: #a85a52;
+
+  --tk-comment: #8b949e;
+  --tk-keyword: #ff7b72;
+  --tk-string: #a5d6ff;
+  --tk-number: #79c0ff;
+  --tk-function: #d2a8ff;
+  --tk-type: #ffa657;
+  --tk-variable: #e6edf3;
+  --tk-operator: #79c0ff;
+  --tk-builtin: #7ee787;
+  --tk-constant: #79c0ff;
+}
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #14191d;
     --bg-soft: #1c2329;
     --bg-code: #1c2329;
@@ -151,13 +180,49 @@ a:hover {
   font-weight: 600;
   letter-spacing: -0.02em;
   margin: 0 8px 16px;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   color: var(--text);
   text-decoration: none;
 }
 
 .sidebar__title:hover {
   color: var(--accent);
+}
+
+.theme-toggle {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  margin: 0 8px 12px;
+}
+
+.theme-toggle:hover {
+  color: var(--accent);
+}
+
+.version-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 12px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.version-switch__select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
 }
 
 .sidebar__group {
@@ -293,6 +358,17 @@ a:hover {
   font-weight: 600;
   color: var(--text-dim);
   margin: 0 0 10px;
+  list-style: none;
+  cursor: default;
+  pointer-events: none;
+}
+
+.toc__title::-webkit-details-marker {
+  display: none;
+}
+
+.toc__title::marker {
+  content: "";
 }
 
 .toc ul {
@@ -332,6 +408,7 @@ a:hover {
 .doc h4,
 .doc h5,
 .doc h6 {
+  position: relative;
   line-height: 1.3;
   margin: 1.8em 0 0.8em;
   font-weight: 600;
@@ -370,6 +447,30 @@ a:hover {
 .doc h5:hover .header-anchor,
 .doc h6:hover .header-anchor,
 .doc .header-anchor:focus {
+  opacity: 1;
+}
+
+.heading-anchor {
+  margin-left: 0.3em;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-family: var(--font-sans);
+  opacity: 0;
+}
+
+.doc h1:hover .heading-anchor,
+.doc h2:hover .heading-anchor,
+.doc h3:hover .heading-anchor,
+.doc h4:hover .heading-anchor,
+.doc h5:hover .heading-anchor,
+.doc h6:hover .heading-anchor,
+.doc h1:focus-within .heading-anchor,
+.doc h2:focus-within .heading-anchor,
+.doc h3:focus-within .heading-anchor,
+.doc h4:focus-within .heading-anchor,
+.doc h5:focus-within .heading-anchor,
+.doc h6:focus-within .heading-anchor,
+.heading-anchor:focus {
   opacity: 1;
 }
 
@@ -451,6 +552,85 @@ a:hover {
   background: none;
   border: none;
   padding: 0;
+}
+
+.code-copy-host {
+  position: relative;
+}
+
+pre.code-copy-host {
+  padding-top: 2.4em;
+}
+
+figure.code-copy-host > pre {
+  padding-top: 16px;
+}
+
+figure.code-copy-host > figcaption {
+  padding-right: 4.5em;
+}
+
+.code-lang {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+figcaption .code-lang {
+  position: static;
+  margin-left: 0.75em;
+}
+
+.code-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.code-copy:hover {
+  color: var(--accent);
+}
+
+/* The template script splits every fence into one `.code-line`, with the
+   line number in `.code-line-no` so copying the block can leave it out.
+   `{1,3-5}` only adds `.is-highlighted`. Until the script runs, the code
+   is still a plain text node. */
+pre .code-line {
+  display: block;
+  position: relative;
+  padding-left: 2.8em;
+}
+
+pre .code-line-no {
+  position: absolute;
+  left: 0;
+  width: 2em;
+  text-align: right;
+  color: var(--text-dim);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+pre .code-line.is-highlighted {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+pre .code-line.is-highlighted .code-line-no {
+  color: var(--accent);
 }
 
 /* Task lists: SuperMD keeps `[ ]` markers as list items, so style the boxes
@@ -538,6 +718,22 @@ pre code .null {
   color: var(--tk-constant);
 }
 
+.doc__footnotes {
+  margin-top: 2rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  font-size: 0.9em;
+}
+
+.doc__footnotes ol {
+  padding-left: 1.5rem;
+}
+
+.doc__footnotes .footnote-backref {
+  margin-left: 0.35rem;
+  text-decoration: none;
+}
+
 /* Mermaid blocks are rendered client-side, so keep them unstyled by the
    highlighter and let mermaid take over. */
 pre.mermaid {
@@ -564,10 +760,57 @@ pre.mermaid svg {
 
 /* ---------- Small screens ---------- */
 
+/* The outline column does not fit beside the article here. It becomes a
+   disclosure above the page instead of disappearing. */
 @media (max-width: 1100px) {
-  .toc {
-    display: none;
+  .layout {
+    display: grid;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   }
+
+  .sidebar {
+    grid-row: 1 / span 2;
+  }
+
+  .toc {
+    display: block;
+    position: static;
+    width: auto;
+    height: auto;
+    grid-column: 2;
+    grid-row: 1;
+    padding: 28px 48px 0 0;
+  }
+
+  .content {
+    grid-column: 2;
+    grid-row: 2;
+    padding-top: 16px;
+  }
+
+  .toc__title {
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  .toc__title::before {
+    content: "▸ ";
+  }
+
+  .toc__panel[open] > .toc__title::before {
+    content: "▾ ";
+  }
+
+  .toc__panel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    background: var(--bg-soft);
+  }
+}
+
+.toc:not(:has(a)) {
+  display: none;
 }
 
 /* The narrow-screen navigation drawer.
@@ -610,7 +853,14 @@ pre.mermaid svg {
 
 @media (max-width: 800px) {
   .layout {
-    display: block;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .toc {
+    order: -1;
+    width: auto;
+    padding: 56px 20px 0;
   }
 
   .nav-toggle {
@@ -655,12 +905,51 @@ pre.mermaid svg {
     margin-left: 46px;
   }
 
+  .doc h1,
+  .doc h2,
+  .doc h3,
+  .doc h4,
+  .doc h5,
+  .doc h6 {
+    scroll-margin-top: 72px;
+  }
+
   .content {
     padding: 62px 20px 64px;
   }
 
   .doc .header-anchor {
     display: none;
+  }
+}
+
+@media print {
+  .sidebar,
+  .toc,
+  .nav-toggle,
+  .nav-scrim,
+  .theme-toggle,
+  .search,
+  .doc__pager,
+  .code-copy,
+  .heading-anchor,
+  .locale-switch,
+  .version-switch {
+    display: none;
+  }
+
+  .layout,
+  .content {
+    display: block;
+    padding: 0;
+  }
+
+  .doc {
+    max-width: none;
+  }
+
+  a {
+    text-decoration: underline;
   }
 }
 
@@ -855,6 +1144,116 @@ pre.mermaid svg {
   text-decoration-color: currentColor;
 }
 
+.sidebar__logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex: none;
+}
+
+.locale-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 8px 16px;
+  font-size: 13px;
+}
+
+.locale-switch__link {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.locale-switch__link[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.doc__note,
+.doc__edit {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.doc__edit a {
+  color: var(--accent);
+}
+
+/* Previous and next follow the sidebar, including the root page as the
+   first stop. A one-page site has no links, so the empty nav is hidden. */
+.doc__pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: var(--content-max);
+  margin-top: 48px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.doc__pager:not(:has(a)) {
+  display: none;
+}
+
+.doc__pager-prev,
+.doc__pager-next {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 46%;
+  text-decoration: none;
+  color: var(--text);
+}
+
+.doc__pager-next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.doc__pager-prev:hover,
+.doc__pager-next:hover {
+  color: var(--accent);
+}
+
+.doc__pager-label {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.doc__pager-title {
+  font-size: 16px;
+}
+
+.notfound {
+  max-width: 36rem;
+  margin: 12vh auto 0;
+  padding: 0 24px 80px;
+}
+
+.notfound__code {
+  margin: 0;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.notfound__title {
+  margin: 8px 0 0;
+  font-size: 40px;
+  line-height: 1.15;
+}
+
+.notfound__body {
+  color: var(--text-dim);
+  font-size: 18px;
+}
+
+.notfound__actions {
+  margin-top: 28px;
+}
+
 /* ------------------------------------------------------------------ ebook
  *
  * `zdoc ebook` renders the same tree as a book. The column is the article.
@@ -876,6 +1275,9 @@ pre.mermaid svg {
 }
 
 .ebook__home {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-family: var(--font-serif);
   font-size: 1.35rem;
   font-weight: 600;
@@ -1161,10 +1563,163 @@ pre.mermaid svg {
   background: var(--danger-bg);
 }
 
+.block.tip::before,
+.block.info::before,
+.block.warning::before,
+.block.danger::before,
+.block.note::before {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.block.tip::before,
+.block.info::before {
+  content: "Tip";
+  color: var(--accent);
+}
+
+.block.info::before {
+  content: "Info";
+}
+
+.block.note::before {
+  content: "Note";
+  color: var(--text-dim);
+}
+
+.block.warning::before {
+  content: "Warning";
+  color: var(--warn-text);
+}
+
+.block.danger::before {
+  content: "Danger";
+  color: var(--danger-border);
+}
+
+a.external::after {
+  content: "↗";
+  margin-left: 0.2em;
+  font-size: 0.75em;
+  text-decoration: none;
+}
+
 .block.note,
 .block.details,
 .block.tabs,
 .block.code-group {
   border-left-color: var(--border);
+}
+
+/* `::: details` renders as a native <details>; its first heading becomes the
+ * <summary>. The block still supplies the padding, so the summary only needs
+ * the affordance and the heading typography. */
+.doc details.block > summary {
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.doc details.block > summary::marker {
+  color: var(--text-dim);
+}
+
+.doc details.block[open] > summary {
+  margin-bottom: 12px;
+}
+
+/* A code fence with `title="..."` renders as a figure so the caption belongs
+ * to the block. Without a title the existing plain <pre> is kept. */
+.doc .code-block {
+  margin: 1em 0;
+}
+
+.doc .code-block figcaption {
+  padding: 0.45em 0.9em;
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  color: var(--text-dim);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+}
+
+.doc .code-block figcaption + pre {
+  margin: 0;
+  border-radius: 0 0 10px 10px;
+}
+
+/* ---------- Tabs and code groups ----------
+ *
+ * `::: tabs` and `::: code-group` both render as `.block.tabs`; the tab
+ * script upgrades the headings in the body into a tab list. These rules
+ * cover the markup it produces. */
+/* Drop the block padding only once the script has built the tab list;
+   without the list the plain-container fallback keeps its padding. */
+.block.tabs:has(.tabs__list) {
+  padding: 0;
+}
+
+.block.tabs .tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.block.tabs .tabs__list [role="tab"] {
+  appearance: none;
+  margin: 0 0 -1px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-sans);
+  font-size: 0.85em;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.block.tabs .tabs__list [role="tab"]:hover {
+  color: var(--text);
+}
+
+.block.tabs .tabs__list [role="tab"][aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.block.tabs .tabs__list [role="tab"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* The block directive is its own paragraph. When the body starts with a
+ * block element (a heading in `tabs`, a fence in `code-group`) that
+ * paragraph is empty; hide it so it does not add a gap. */
+.block.tabs > p:empty {
+  display: none;
+}
+
+.block.tabs .tabs__panels > [role="tabpanel"] {
+  padding: 12px 16px;
+}
+
+/* Panels toggled off by the script stay in the DOM so switching tabs does
+ * not rebuild the code blocks. */
+.block.tabs .tabs__panels > [role="tabpanel"][hidden] {
+  display: none;
 }
 

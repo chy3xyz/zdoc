@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const slug = @import("slug.zig");
+const case_table = @import("case_table.zig");
 const data = @import("corpus_data.zig");
 
 /// Anchors that provably no longer have a matching heading.
@@ -65,4 +66,12 @@ test "corpus: every anchor resolves to a generated heading slug" {
     std.debug.print("\nchecked={d} stale={d} missing={d}\n", .{ checked, stale, missing });
     try std.testing.expectEqual(@as(usize, 0), missing);
     try std.testing.expect(checked > 0);
+}
+
+test "toLower: Latin capital maps, unmapped codepoint stays" {
+    // U+00C0 LATIN CAPITAL LETTER A WITH GRAVE → U+00E0.
+    try std.testing.expectEqual(@as(u21, 0x00E0), case_table.toLower(0x00C0));
+    // U+00D7 MULTIPLICATION SIGN sits in the gap between the Latin-1 letter
+    // ranges and has no simple lowercase mapping.
+    try std.testing.expectEqual(@as(u21, 0x00D7), case_table.toLower(0x00D7));
 }

@@ -2,7 +2,7 @@
     .name = .zdoc,
     .version = "0.16.2",
     .fingerprint = 0x5cc6bb924ce7c891,
-    .minimum_zig_version = "0.17.0-dev.2338+b46a7f3a2",
+    .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .scripty = .{
             .url = "git+https://github.com/kristoff-it/scripty#51a03222e9a125a65888a5df6e2a41e36c86ccd5",

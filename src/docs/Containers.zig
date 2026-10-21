@@ -11,7 +11,8 @@
 //! SuperMD has no such syntax, so it renders as three paragraphs of literal
 //! `:::` text. Rather than teach the parser something it will not know about
 //! next release, the container is rewritten here into the blockquote form
-//! SuperMD already understands, which renders as `<div class="block warning">`.
+//! SuperMD already understands, which renders as `<div class="block warning">`
+//! (or a native `<details>` for `::: details`).
 //!
 //! ## Why a rewrite and not an AST edit
 //!
@@ -56,9 +57,9 @@ fn isKnown(name: []const u8) bool {
     for (kinds) |k| {
         if (std.mem.eql(u8, k.name, name)) return true;
     }
-    // These two are containers whose inner structure this rewrite does not
-    // build; they are still recognized so the block is not left as literal
-    // `:::` text, and rendered as a plain container.
+    // These two are containers whose inner structure the template-side tab
+    // script builds; they are still recognized so the block is not left as
+    // literal `:::` text, and both are rewritten to a `.block.tabs` container.
     return std.mem.eql(u8, name, "code-group") or std.mem.eql(u8, name, "tabs");
 }
 
@@ -81,10 +82,6 @@ pub fn rewrite(
     var open: std.ArrayListUnmanaged(Kind) = .empty;
     defer open.deinit(arena);
 
-    // Title of the innermost container, used as its label.
-    var title_buf: [256]u8 = undefined;
-    var title_len: usize = 0;
-
     var lines = splitLines(arena, src) catch |err| return err;
     defer lines.deinit(arena);
 
@@ -92,22 +89,35 @@ pub fn rewrite(
     var fence_marker_len: usize = 0;
 
     for (lines.items) |line| {
+        const trimmed = std.mem.trimStart(u8, line.text, " \t");
+
         // Inside a fenced code block nothing is rewritten, and the fence is
-        // tracked only so that its closing line is recognized.
+        // tracked only so that its closing line is recognized. Inside a
+        // container every line, including the fence and its body, has to stay
+        // quoted: an unquoted line would end the blockquote and leak the rest
+        // of the container out of it.
         if (fence) |f| {
+            if (open.items.len != 0) {
+                for (0..open.items.len) |_| try out.append(arena, '>');
+            }
             try out.appendSlice(arena, line.text);
             try out.append(arena, '\n');
-            if (line.indent < 4 and closesFence(line.text, f, fence_marker_len)) {
+            if (line.indent < 4 and closesFence(trimmed, f, fence_marker_len)) {
                 fence = null;
             }
             continue;
         }
 
-        if (startsFence(line.text, &fence_marker_len)) |f| {
-            fence = f;
-            try out.appendSlice(arena, line.text);
-            try out.append(arena, '\n');
-            continue;
+        if (line.indent < 4) {
+            if (startsFence(trimmed, &fence_marker_len)) |f| {
+                fence = f;
+                if (open.items.len != 0) {
+                    for (0..open.items.len) |_| try out.append(arena, '>');
+                }
+                try out.appendSlice(arena, line.text);
+                try out.append(arena, '\n');
+                continue;
+            }
         }
 
         // An indented code block: not a fence, but equally not prose. Outside
@@ -123,8 +133,8 @@ pub fn rewrite(
             continue;
         }
 
-        if (std.mem.startsWith(u8, line.text, ":::")) {
-            const rest = std.mem.trim(u8, line.text[3..], " \t");
+        if (line.indent < 4 and std.mem.startsWith(u8, trimmed, ":::")) {
+            const rest = std.mem.trim(u8, trimmed[3..], " \t");
 
             // `:::` alone closes the innermost container.
             if (rest.len == 0) {
@@ -136,6 +146,11 @@ pub fn rewrite(
                     continue;
                 }
                 _ = open.pop();
+                // Keep the enclosing blockquotes open. A bare blank line
+                // would close every level, so quote it at the new depth.
+                if (open.items.len != 0) {
+                    for (0..open.items.len) |_| try out.append(arena, '>');
+                }
                 try out.append(arena, '\n');
                 continue;
             }
@@ -150,7 +165,11 @@ pub fn rewrite(
 
             if (!isKnown(name)) {
                 // Not one of ours. Treat the whole line as prose so an author
-                // writing about `:::` syntax keeps their text intact.
+                // writing about `:::` syntax keeps their text intact. Inside
+                // a container it still has to stay quoted.
+                if (open.items.len != 0) {
+                    for (0..open.items.len) |_| try out.append(arena, '>');
+                }
                 try out.appendSlice(arena, line.text);
                 try out.append(arena, '\n');
                 continue;
@@ -158,20 +177,52 @@ pub fn rewrite(
 
             rewrote = true;
             try open.append(arena, kindFor(name));
-            title_len = 0;
-            if (title.len != 0) {
-                title_len = @min(title.len, title_buf.len);
-                @memcpy(title_buf[0..title_len], title[0..title_len]);
-            }
+            const kind = open.items[open.items.len - 1];
 
             // Each level of nesting is one more `>` so that SuperMD nests the
-            // blockquotes, which is what produces nested containers. The
-            // directive goes on the quoted line with nothing after it; the
-            // form that actually renders is `>[]($block.attrs('tip'))`.
+            // blockquotes, which is what produces nested containers.
+            if (std.mem.eql(u8, kind.name, "details")) {
+                // SuperMD only emits `<details>` when the block directive is
+                // embedded in the first heading, whose text becomes the
+                // `<summary>`. `collapsible(false)` leaves the element closed
+                // initially, as `::: details` does in VitePress.
+                const label = if (title.len != 0) title else "Details";
+                for (0..open.items.len) |_| try out.append(arena, '>');
+                try out.appendSlice(arena, "# [");
+                try out.appendSlice(arena, label);
+                try out.appendSlice(arena, "]($block.collapsible(false).attrs('");
+                try out.appendSlice(arena, kind.class);
+                try out.appendSlice(arena, "'))");
+                try out.append(arena, '\n');
+                continue;
+            }
+
+            // The directive goes on the quoted line with nothing after it;
+            // the form that actually renders is
+            // `>[]($block.attrs('tip'))`.
             for (0..open.items.len) |_| try out.append(arena, '>');
             try out.appendSlice(arena, "[]($block.attrs('");
-            try out.appendSlice(arena, open.items[open.items.len - 1].class);
-            try out.appendSlice(arena, "'))\n");
+            try out.appendSlice(arena, kind.class);
+            try out.appendSlice(arena, "'))");
+
+            // The title is a visible label, not syntax. Keep it on the same
+            // line as the (invisible) directive so the paragraph does not
+            // begin with a stray space from a soft break. Tabs take their
+            // labels from the headings in the body, so a bold title here
+            // would be a second, wrong label.
+            const titled = title.len != 0 and
+                !std.mem.eql(u8, kind.name, "tabs") and
+                !std.mem.eql(u8, kind.name, "code-group");
+            if (titled) {
+                try out.appendSlice(arena, "**");
+                try out.appendSlice(arena, title);
+                try out.appendSlice(arena, "**");
+            }
+            try out.append(arena, '\n');
+            if (titled) {
+                for (0..open.items.len) |_| try out.append(arena, '>');
+                try out.append(arena, '\n');
+            }
             continue;
         }
 
@@ -205,8 +256,12 @@ fn kindFor(name: []const u8) Kind {
     for (kinds) |k| {
         if (std.mem.eql(u8, k.name, name)) return k;
     }
-    // `code-group` and `tabs` render as plain containers until they have
-    // inner structure of their own.
+    // `code-group` and `tabs` are both rendered by the template-side tab
+    // script, which looks for a single `.block.tabs` container. The original
+    // name is kept so the rewrite can still tell them apart.
+    if (std.mem.eql(u8, name, "code-group") or std.mem.eql(u8, name, "tabs")) {
+        return .{ .name = name, .class = "tabs" };
+    }
     return .{ .name = name, .class = name };
 }
 
@@ -293,18 +348,15 @@ test "a tip container becomes a blockquote block" {
     );
 }
 
-test "a container title is dropped, since a block directive cannot carry it" {
+test "a container title is rendered as a label" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // The body is what carries meaning. Keeping the title would need an
-    // attribute value the template language cannot build by concatenation,
-    // and a VitePress title is decoration on top of the kind.
     const out = try run(arena, "::: warning Careful\nDanger ahead.\n:::\n");
     try testing.expect(std.mem.indexOf(u8, out, "$block.attrs('warning')") != null);
     try testing.expect(std.mem.indexOf(u8, out, "Danger ahead.") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "Careful") == null);
+    try testing.expect(std.mem.indexOf(u8, out, "**Careful**") != null);
 }
 
 test "a ::: inside a fenced code block is left alone" {
@@ -422,15 +474,41 @@ test "an unclosed container still renders its body" {
     try testing.expect(std.mem.indexOf(u8, out, ">body without a close\n") != null);
 }
 
-test "code-group and tabs are recognized as containers" {
+test "code-group and tabs share the tabs container class" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
     for ([_][]const u8{ "code-group", "tabs" }) |name| {
         var buf: [128]u8 = undefined;
-        const src = try std.fmt.bufPrint(&buf, "::: {s}\nbody\n:::\n", .{name});
+        // A title is ignored: tab labels live in the body as headings.
+        const src = try std.fmt.bufPrint(&buf, "::: {s} Ignored\n## One\nbody\n:::\n", .{name});
         const out = try run(arena, src);
-        try testing.expect(std.mem.indexOf(u8, out, "$block.attrs('") != null);
+        try testing.expectEqualStrings(
+            ">[]($block.attrs('tabs'))\n>## One\n>body\n\n",
+            out,
+        );
     }
+}
+
+test "a details container becomes a collapsible heading block" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const out = try run(arena_state.allocator(), "::: details More\nHidden.\n:::\n");
+    try testing.expectEqualStrings(
+        "># [More]($block.collapsible(false).attrs('details'))\n>Hidden.\n\n",
+        out,
+    );
+}
+
+test "a details container without a title gets a default summary" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+
+    const out = try run(arena_state.allocator(), "::: details\nHidden.\n:::\n");
+    try testing.expectEqualStrings(
+        "># [Details]($block.collapsible(false).attrs('details'))\n>Hidden.\n\n",
+        out,
+    );
 }

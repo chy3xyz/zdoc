@@ -1,0 +1,10 @@
+title: Fixture Docs
+lang: zh-CN
+url_prefix: /docs/
+mermaid: vendor/mermaid/dist
+footer: Fixture footer
+versions:
+  - name: v1
+    prefix: /docs/
+  - name: v0
+    prefix: /docs/v0/

@@ -35,7 +35,8 @@ pub fn help() noreturn {
         \\                     directory exists, otherwise the current directory
         \\  ebook [dir]        Build that same tree as a book. The root page
         \\                     is the cover; other pages are chapters
-        \\  (no command)       Development server for a site or blog
+        \\  (no command)       Development server. With zine.ziggy, previews the
+        \\                     site or blog. Otherwise previews the docs tree
         \\  init [dir]         Initialize an official site: landing, product,
         \\                     blog, plus docs/ and book/ Markdown trees
         \\  release            Previous name of 'blog', from the current directory
@@ -47,8 +48,8 @@ pub fn help() noreturn {
         \\  --title, -t TITLE   Site title (defaults to the directory name)
         \\  --base DIR          Base directory the content path is relative to
         \\  --output, -o DIR    Output directory (defaults to 'public/')
-        \\  --mermaid FILE       Vendored mermaid ESM bundle, for rendering
-        \\                      diagrams without network access
+        \\  --mermaid FILE|DIR  Vendored mermaid bundle or dist directory,
+        \\                      for rendering diagrams without network access
         \\  --force, -f         Ignore other files in the output directory
         \\
         \\General Options:
