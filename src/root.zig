@@ -2217,11 +2217,19 @@ pub fn run(
             const always = build.docs_always_install.contains(path);
 
             if (entry.value_ptr.raw > 0 or always) {
+                const dest_path = std.mem.trimStart(u8, path, "/");
+                if (std.fs.path.dirname(dest_path)) |parent| {
+                    if (parent.len != 0) {
+                        var parent_dir = site_assets_install_dir.createDirPathOpen(io, parent, .{}) catch |err|
+                            fatal.dir(parent, err);
+                        parent_dir.close(io);
+                    }
+                }
                 _ = build.site_assets_dir.updateFile(
                     io,
                     path,
                     site_assets_install_dir,
-                    std.mem.trimStart(u8, path, "/"),
+                    dest_path,
                     .{},
                 ) catch |err| fatal.file(path, err);
             }

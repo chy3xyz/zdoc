@@ -461,7 +461,7 @@ fn copyMermaidChunks(
     };
     defer chunks.close(io);
 
-    const prefix = try std.fs.path.join(gpa, &.{ "chunks", stem });
+    const prefix = try posixJoin(gpa, &.{ "chunks", stem });
     try copyTree(gpa, io, chunks, assets, prefix, installed, true);
 }
 
@@ -509,7 +509,7 @@ fn copyTree(
                 const rel = if (prefix.len == 0)
                     try gpa.dupe(u8, entry.name)
                 else
-                    try std.fs.path.join(gpa, &.{ prefix, entry.name });
+                    try posixJoin(gpa, &.{ prefix, entry.name });
 
                 const data = try src.readFileAllocOptions(
                     io,
@@ -527,7 +527,7 @@ fn copyTree(
                 const rel = if (prefix.len == 0)
                     try gpa.dupe(u8, entry.name)
                 else
-                    try std.fs.path.join(gpa, &.{ prefix, entry.name });
+                    try posixJoin(gpa, &.{ prefix, entry.name });
 
                 var sub = try src.openDir(io, entry.name, .{ .iterate = true });
                 defer sub.close(io);
@@ -538,6 +538,25 @@ fn copyTree(
             else => {},
         }
     }
+}
+
+/// Joins path segments with `/`. Asset names are URL paths, and the site
+/// asset index stores them that way on every operating system.
+fn posixJoin(gpa: std.mem.Allocator, parts: []const []const u8) ![]u8 {
+    var len: usize = 0;
+    for (parts) |part| len += part.len;
+    if (parts.len > 1) len += parts.len - 1;
+    const out = try gpa.alloc(u8, len);
+    var i: usize = 0;
+    for (parts, 0..) |part, n| {
+        @memcpy(out[i..][0..part.len], part);
+        i += part.len;
+        if (n + 1 != parts.len) {
+            out[i] = '/';
+            i += 1;
+        }
+    }
+    return out;
 }
 
 fn isRuntimeFile(name: []const u8) bool {
